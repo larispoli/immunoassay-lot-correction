@@ -5,54 +5,54 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
 ## Contents
 
 - [Overview](#overview)
-  - [When to Use This Pipeline](#when-to-use-this-pipeline)
-    - [When to Use ELISAtools Instead](#when-to-use-elisatools-instead)
-      - [How the Correction Works](#how-the-correction-works)
-        - [Correction Tiers](#correction-tiers)
-          - [When Tier 1 May Not Be Appropriate](#when-tier-1-may-not-be-appropriate)
-            - [Selecting the Reference Lot](#selecting-the-reference-lot)
-              - [Reference Samples](#reference-samples)
-                - [Requirements](#requirements)
-                  - [Repository Contents](#repository-contents)
-                    - [Quick Start](#quick-start)
-                      - [Interpreting Key Outputs](#interpreting-key-outputs)
-                        - [Methods Summary for Manuscript Use](#methods-summary-for-manuscript-use)
-                          - [References](#references)
+- [When to Use This Pipeline](#when-to-use-this-pipeline)
+- [When to Use ELISAtools Instead](#when-to-use-elisatools-instead)
+- [How the Correction Works](#how-the-correction-works)
+- [Correction Tiers](#correction-tiers)
+- [Dataset Considerations](#dataset-considerations)
+- [Selecting the Reference Lot](#selecting-the-reference-lot)
+- [Reference Samples](#reference-samples)
+- [Requirements](#requirements)
+- [Repository Contents](#repository-contents)
+- [Quick Start](#quick-start)
+- [Interpreting Key Outputs](#interpreting-key-outputs)
+- [Methods Summary for Manuscript Use](#methods-summary-for-manuscript-use)
+- [References](#references)
                             
-                            ## Overview
+## **Overview**
                             
-                            Immunoassays used in longitudinal studies and biobanks are subject to variation from multiple sources: manufacturing differences between reagent lots, plate-to-plate variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses such as cycle detection, ROC analysis, and time series modeling.
+Immunoassays used in longitudinal studies and biobanks are subject to variation from multiple sources: manufacturing differences between reagent lots, plate-to-plate variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses such as cycle detection, ROC analysis, and time series modeling.
                             
-                            This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
+This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
                             
-                            ## When to Use This Pipeline
+## **When to Use This Pipeline**
                             
-                            This pipeline is appropriate when:
+This pipeline is appropriate when:
                               
-                            - You have reported concentrations from immunoassays run across multiple plates and/or reagent lots.
-                            - Raw sample-level signal data (individual well ODs for each unknown sample) is not available or not practical to retrieve retrospectively.
-                            - Standard curve data (concentration and signal values for each standard point) can be recovered from plate reports, instrument software, or laboratory records.
-                            - You need corrected values on a consistent scale for analyses such as ROC curves, threshold-based detection, cross-analyte comparisons, or longitudinal trajectory analysis.
+- You have reported concentrations from immunoassays run across multiple plates and/or reagent lots.
+- Raw sample-level signal data (individual well ODs for each unknown sample) is not available or not practical to retrieve retrospectively.
+- Standard curve data (concentration and signal values for each standard point) can be recovered from plate reports, instrument software, or laboratory records.
+- You need corrected values on a consistent scale for analyses such as ROC curves, threshold-based detection, cross-analyte comparisons, or longitudinal trajectory analysis.
                             
-                            ## When to Use ELISAtools Instead
+## **When to Use ELISAtools Instead**
                             
-                            The ELISAtools package (Feng et al. 2019) is more appropriate when:
+The ELISAtools package (Feng et al. 2019) is more appropriate when:
                               
-                            - You have raw plate reader output files (96-well format with individual well ODs for all standards, controls, and unknowns).
-                            - You want to recalculate sample concentrations from the adjusted standard curve rather than applying a multiplicative correction to already-reported values.
-                            - Your data is prospective and you can integrate ELISAtools into your routine data processing workflow.
+- You have raw plate reader output files (96-well format with individual well ODs for all standards, controls, and unknowns).
+- You want to recalculate sample concentrations from the adjusted standard curve rather than applying a multiplicative correction to already-reported values.
+- Your data is prospective and you can integrate ELISAtools into your routine data processing workflow.
+  
+This pipeline adapts the core methodology of Feng et al. (2019) -- simultaneous curve fitting with shared shape parameters -- but applies the resulting shift factor to reported concentrations rather than recalculating from raw signals. This makes it suitable for retrospective datasets where raw signals are unavailable.
                             
-                            This pipeline adapts the core methodology of Feng et al. (2019) -- simultaneous curve fitting with shared shape parameters -- but applies the resulting shift factor to reported concentrations rather than recalculating from raw signals. This makes it suitable for retrospective datasets where raw signals are unavailable.
+## **How the Correction Works**
                             
-                            ## How the Correction Works
+### **The Simultaneous Curve Fit**
                             
-                            ### The Simultaneous Curve Fit
+All standard curves in the dataset are fitted simultaneously using the `drc` package in R. The key constraint: all curves share the same shape parameters (upper asymptote, lower asymptote, slope, and for 5PL, asymmetry). Only the curve midpoint (ED50) is allowed to vary per plate.
                             
-                            All standard curves in the dataset are fitted simultaneously using the `drc` package in R. The key constraint: all curves share the same shape parameters (upper asymptote, lower asymptote, slope, and for 5PL, asymmetry). Only the curve midpoint (ED50) is allowed to vary per plate.
-                            
-                            This enforces the assumption that variation between plates manifests as a horizontal shift on the concentration axis -- the curve slides left or right but retains the same shape. A sample producing a given signal would be assigned a higher or lower concentration depending on which plate it was run on, purely because of where that plate's curve sits on the x-axis.
+This enforces the assumption that variation between plates manifests as a horizontal shift on the concentration axis -- the curve slides left or right but retains the same shape. A sample producing a given signal would be assigned a higher or lower concentration depending on which plate it was run on, purely because of where that plate's curve sits on the x-axis.
 
-### The Shift Factor
+### **The Shift Factor**
 
 The shift factor for each plate is the ratio of the reference lot's median midpoint to that plate's individual midpoint:
 
@@ -60,33 +60,36 @@ The shift factor for each plate is the ratio of the reference lot's median midpo
 
 A shift factor of 1.0 means the plate's curve is in the same position as the reference lot's typical curve. A shift factor of 1.3 means the reference lot would report a concentration 1.3x higher than this plate for the same signal.
 
-The corrected concentration is:
-
-    Corrected Value = Reported Value x Shift Factor
+The corrected concentration is: Corrected Value = Reported Value x Shift Factor
 
 Every plate receives its own shift factor, including plates in the reference lot. The reference lot's median midpoint defines the scale; individual plates within the reference lot are corrected toward their own lot's median just like plates in any other lot.
 
-### Outlier Detection
+### **Outlier Detection**
 
 Plates whose standard curves do not conform to the shared shape are identified using the interquartile range (IQR) method applied to per-plate root mean square error (RMSE) values. Plates with RMSE exceeding Q3 + 1.5 x IQR are classified as outliers (Tukey 1977). This is the standard boxplot outlier rule.
 
 Flagged plates are excluded from the calculation of the reference lot's median midpoint so they do not influence the baseline. They still receive their own per-plate correction factor, but their corrected values carry additional uncertainty. Users should identify which samples were run on flagged plates.
                             
-                            ### Single-Lot Datasets
-                            
-                            For datasets with only one reagent lot, the pipeline functions as a plate-to-plate correction tool. All plates are corrected toward the lot's median midpoint. The workflow is identical; there is simply no between-lot component.
+#### *Single-Lot Datasets:* 
 
-## Correction Tiers
+For datasets with only one reagent lot, the pipeline functions as a plate-to-plate correction tool. All plates are corrected toward the lot's median midpoint. The workflow is identical; there is simply no between-lot component.
 
-### Tier 1 -- Standard Curve Shift Factor
+## **Correction Tiers**
+
+### **Tier 1 -- Standard Curve Shift Factor**
 
 The primary correction method. Uses the simultaneous curve fit described above. Available for every plate in the dataset because every plate has standard curve data (a requirement for inclusion in the metadata table).
 
 Tier 1 is based on the methodology described in Feng et al. (2019), adapted for application to reported concentrations rather than recalculation from raw signals.
+  
+  **When Tier 1 May Not Be Appropriate**
 
-### Tier 2 -- Bridging Sample Correction
+  *The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape. When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position.*
 
-An independent, measurement-based correction. A biological reference sample (pooled serum or plasma from a relevant species) measured on multiple plates provides a direct correction factor:
+
+### **Tier 2 -- Reference Sample Based Correction**
+
+An independent, measurement-based correction. A biological reference sample (e.g., pooled sample from a relevant species) measured on multiple plates provides a direct correction factor:
 
     Tier 2 Factor = Reference Lot Mean Concentration / Plate Concentration (same sample)
 
@@ -94,7 +97,11 @@ This follows the bridging sample normalization approach described by Henson et a
 
 When both Tier 1 and Tier 2 are available, agreement between them provides the strongest evidence that the correction is appropriate. Divergence suggests the lot effect involves more than a simple curve shift and warrants further investigation.
 
-### Choosing Between Tiers
+  **Tier 2 Implications**
+
+  *If the selected reference lot has no biological reference sample data, Tier 2 will not be available. The pipeline alerts you to this after selection. If Tier 2 validation is important for your dataset, consider selecting a lot that has reference sample data.*
+
+### **Choosing Between Tiers**
 
 When both tiers agree: either is defensible; Tier 1 provides full coverage while Tier 2 validates it.
 
@@ -102,15 +109,12 @@ When Tier 1 shows increased variability in the reference sample consistency chec
 
 When Tier 2 is unavailable (no reference samples, or reference samples do not span all lots): Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it.
 
-## When Tier 1 May Not Be Appropriate
 
-The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape.
+## **Dataset Considerations**
 
-When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position.
+### The Five-parameter Logistic Curve Fitted (5PL) Datasets
 
-### The 5PL Consideration
-
-This is particularly relevant when the assay uses a 5PL (five-parameter logistic) curve model. The 5PL includes an asymmetry parameter (f) that describes how the upper and lower portions of the curve differ in steepness. In the simultaneous fit, this parameter is shared across all plates.
+The 5PL includes an asymmetry parameter (f) that describes how the upper and lower portions of the curve differ in steepness. In the simultaneous fit, this parameter is shared across all plates.
 
 If the asymmetry genuinely differs across lots (e.g., because antibody binding kinetics changed), forcing a single shared value creates a compromise that does not accurately describe any lot. The midpoint can only shift the curve horizontally; it cannot compensate for a shape change. In this situation:
 
@@ -120,7 +124,7 @@ If the asymmetry genuinely differs across lots (e.g., because antibody binding k
 
 This scenario is consistent with the findings of Wilson et al. (2021), who demonstrated that when the antibody in a cortisol EIA kit was replaced, the standard curve shape changed along with cross-reactivity, and curve-based correction was not sufficient.
 
-### 4PL Datasets
+### The Four-parameter Logistic Curve Fitted (4PL) Datasets
 
 For datasets where all plates use 4PL (four-parameter logistic), the shape is symmetric by definition. The simultaneous fit constrains slope and asymptotes to be shared. If these truly are consistent across lots (same antibody, same assay format), Tier 1 will work well. If the reference sample consistency check shows increased variability even with 4PL, the variation may involve changes in slope or asymptotes rather than just midpoint position.
 
@@ -134,7 +138,7 @@ The pipeline reports the median difference between original reported concentrati
 
 The reference lot defines the baseline scale for all corrected values. Both Tier 1 and Tier 2 corrections are anchored to this lot.
 
-### Considerations
+### Other Items to Consider
 
 - **Maintain consistency:** If a lot was the reference in previous analyses or publications, keep it. This ensures previously corrected values and any thresholds derived from them remain comparable.
 - **Stability:** Prefer the lot with the most plates (more stable median midpoint) and the tightest clustering of midpoints (most internally consistent baseline).
@@ -142,9 +146,6 @@ The reference lot defines the baseline scale for all corrected values. Both Tier
 - **Fundamental assay changes:** If a complete antibody replacement or assay format change occurred, the new conditions may warrant a new reference lot. Values corrected to the new reference are not directly comparable to values corrected to the previous one. This effectively creates two separate analytical eras that should be documented (Wilson et al. 2021).
 - **Scale, not relationships:** The choice of reference lot does not affect the relative correction between any two plates. It only sets the absolute scale that corrected values are expressed on.
 
-### Tier 2 Implications
-
-If the selected reference lot has no biological reference sample data, Tier 2 will not be available. The pipeline alerts you to this after selection. If Tier 2 validation is important for your dataset, consider selecting a lot that has reference sample data.
 
 ## Reference Samples
 
@@ -182,7 +183,7 @@ Packages are installed automatically on first run if not already present.
 | File | Description |
 |------|-------------|
 | `Lot_Correction_Pipeline.Rmd` | The R Notebook pipeline. Open in RStudio and run interactively. |
-| `Assay_Plate_Metadata_Template.xlsx` | Template for plate-level metadata input. Contains four sheets: Instructions, AssayPlateMetadata (blank template), Codebook (data dictionary), and Examples. |
+| `Assay_Plate_Data_Template.xlsx` | Template for plate-level metadata input. Contains four sheets: Instructions, AssayPlateData (blank template), Codebook (data dictionary), and Examples. |
 | `README.md` | This file. |
 
 ## Quick Start
@@ -191,7 +192,7 @@ Packages are installed automatically on first run if not already present.
 
 2. **Open the pipeline.** Open `Lot_Correction_Pipeline.Rmd` in RStudio.
 
-3. **Run all chunks.** Use Code > Run All (Ctrl+Alt+R). Prompts will appear in the Console at decision points.
+3. **Run chunks one at a time.** Prompts will appear in the Console at decision points.
 
 4. **Review outputs.** Diagnostic tables and figures appear inline after each chunk. Review them before responding to prompts.
 
@@ -199,7 +200,7 @@ Packages are installed automatically on first run if not already present.
 
 6. **Rename.** Rename the .nb.html file to include the analyte name (e.g., `Lot_Correction_Pipeline_P4.nb.html`) before running a different analyte.
 
-7. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual trajectories before and after correction to assess biological impact.
+7. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual plots before and after correction to assess biological impact.
 
 ## Interpreting Key Outputs
 
@@ -252,15 +253,15 @@ Correction effectiveness was evaluated by comparing reference sample concentrati
 
 For analyses using mixed-effects models, including plate as a random effect should be considered to absorb residual variation not captured by the standard curve correction (Whitcomb et al. 2010). For analyses using corrected values directly (e.g., threshold-based detection, time series), the corrected values represent the best available estimate of the true concentration on the reference lot's scale.
                             
-                            All analyses were performed in R using the drc package (Ritz et al. 2015) for simultaneous curve fitting and the tidyverse suite for data manipulation and visualization.
+All analyses were performed in R using the drc package (Ritz et al. 2015) for simultaneous curve fitting and the tidyverse suite for data manipulation and visualization.
                             
-                            ---
+---
                               
-                              ## References
+## References
                               
-                              - Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. *PLoS ONE*, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
+- Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. *PLoS ONE*, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
                             
-                            - Henson RL, Volluz K, Saef BA, et al. (2022). A methodology for normalizing fluid biomarker concentrations across reagent lots. *Alzheimer's and Dementia*, 18(S6), e066912. https://doi.org/10.1002/alz.066912
+- Henson RL, Volluz K, Saef BA, et al. (2022). A methodology for normalizing fluid biomarker concentrations across reagent lots. *Alzheimer's and Dementia*, 18(S6), e066912. https://doi.org/10.1002/alz.066912
 
 - Ritz C, Baty F, Streibig JC, Gerhard D. (2015). Dose-response analysis using R. *PLoS ONE*, 10(12), e0146021. https://doi.org/10.1371/journal.pone.0146021
 
