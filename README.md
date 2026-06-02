@@ -188,7 +188,7 @@ Packages are installed automatically on first run if not already present.
 
 ## Quick Start
 
-1. **Prepare your data.** Fill out the Assay Plate Metadata Template with one row per assay plate. See the Instructions and Examples sheets in the template for guidance.
+1. **Prepare your data.** Fill out the Assay Plate Data Template with one row per assay plate. See the Instructions and Examples sheets in the template for guidance.
 
 2. **Open the pipeline.** Open `Lot_Correction_Pipeline.Rmd` in RStudio.
 
@@ -201,6 +201,20 @@ Packages are installed automatically on first run if not already present.
 6. **Rename.** Rename the .nb.html file to include the analyte name (e.g., `Lot_Correction_Pipeline_P4.nb.html`) before running a different analyte.
 
 7. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual plots before and after correction to assess biological impact.
+
+#### **Optional Input (for Phase 6 -- Apply & Visualize Correction):**
+
+Sample data file (.csv or .xlsx) containing longitudinal sample concentrations linked to plate metadata. At minimum, this file must include:
+
+| Column | Description |
+|--------|-------------|
+| Sample_ID | Unique identifier for the biological sample |
+| Animal_ID | Individual animal identifier for longitudinal tracking |
+| Plate_ID | Must match Plate_ID values in the Assay data file |
+| Conc | Reported concentration; the correction factor is multiplicative, so order of operations with dilution factor does not matter |
+| Coll_Date | Date of sample collection |
+
+Additional columns (e.g., species, sex, reproductive status) are preserved but not required by the pipeline.
 
 ## Interpreting Key Outputs
 
