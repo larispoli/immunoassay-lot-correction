@@ -134,7 +134,7 @@ For datasets where all plates use 4PL (four-parameter logistic), the shape is sy
 
 When some plates were originally fitted with 4PL and others with 5PL, the pipeline tests both shared models and selects the one with lower overall RMSE. In most cases, the 5PL will be selected because it can accommodate slight asymmetry in 4PL plates (the asymmetry parameter will be estimated near 1.0 for symmetric curves) while also fitting the genuinely asymmetric 5PL plates.
 
-The pipeline reports the median difference between original reported concentrations and simultaneous model predictions for each model type separately. If the differences are small (under 10%), the original curve model choice did not substantially affect the reported values and no action is needed. If the differences are large, and raw plate reader data is available, rerunning the affected plates with a consistent curve model would produce more accurate starting concentrations before applying the shift factor correction.
+The pipeline reports the median difference between original reported concentrations and simultaneous model predictions for each model type separately. If the differences are small (under 5%), the original curve model choice did not substantially affect the reported values, and no action is needed. If the differences are large, and raw plate reader data is available, rerunning the affected plates with a consistent curve model would produce more accurate starting concentrations before applying the shift factor correction.
 
 ## Selecting the Reference Lot
 
@@ -154,11 +154,6 @@ The reference lot defines the baseline scale for all corrected values. Both Tier
 ### What Qualifies as a Reference Sample
 
 A biological reference sample is a pooled biological sample (e.g., pooled serum or plasma from a relevant species) that is aliquoted, stored, and run on each plate alongside unknown samples. Its purpose is to track assay consistency across plates and lots.
-
-A reference sample is NOT:
-
-- A manufacturer-provided QC sample (typically in an idealized matrix, used for pass/fail decisions)
-- A calibrator or standard (captured separately in the standard curve columns)
 
 ### Bridging References
 
@@ -241,9 +236,9 @@ Additional columns (e.g., species, sex, reproductive status) are preserved but n
 
 **What to look for:** Reference sample CVs should decrease after correction. If they increase, the correction may not be appropriate.
 
-### Phase 6.4 -- Trajectory Plots
+### Phase 6.4 -- Before & After Plots
 
-**What to look for:** Where the orange (before) and blue (after) lines diverge, the correction changed the value. This should align with plate or lot transitions, not with biological events.
+**What to look for:** Where the orange (before) and blue (after) lines diverge, the correction changed the value. This should align with plate or lot transitions.
 
 ## Methods Summary for Manuscript Use
 
