@@ -1,0 +1,1526 @@
+---
+title: "Immunoassay Lot-to-Lot Correction Pipeline"
+subtitle: "Diagnostic Assessment and Correction of Lot and Plate Effects"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: hide
+    fig_width: 10
+    fig_height: 6
+---
+# How to Use Pipeline
+
+**Read the README file before running this pipeline for the first time.** It explains the correction methodology, when each tier is appropriate, and how to interpret the diagnostic outputs.
+
+1. **Prepare your data.** Fill out the Assay Plate Data Template with one row per assay plate. See the Instructions and Examples sheets in the template for guidance.
+
+2. **Run chunks one at a time.** Prompts will appear in the Console at decision points.
+
+3. **Review outputs.** Diagnostic tables and figures appear inline after each chunk. Review them before responding to prompts.
+
+4. **Save.** After all chunks complete, save the file (Ctrl+S) to capture all outputs into the notebook (.nb.html).
+
+5. **Rename.** Rename the .nb.html file to include the analyte name (e.g., `Lot_Correction_Pipeline_P4.nb.html`) before running a different analyte.
+
+6. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual plots before and after correction to assess biological impact.
+
+# Phase 1: System and Data Setup 
+
+## 1.1 Setup System and Load Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center"
+)
+
+# Consistent table formatting
+fmt_table <- function(data, caption = NULL, col.names = NULL, digits = 4) {
+  kable(data, caption = caption, col.names = col.names, digits = digits) %>%
+    kable_styling(bootstrap_options = c("striped", "bordered", "condensed"),
+                  full_width = FALSE, position = "left") %>%
+    column_spec(1:ncol(data), extra_css = "padding: 4px 12px; text-align: center;")
+}
+
+required_packages <- c("readxl", "dplyr", "tidyr", "ggplot2", "drc",
+                        "lme4", "broom", "patchwork", "scales", "knitr",
+                        "kableExtra")
+
+missing <- required_packages[!required_packages %in% installed.packages()[, "Package"]]
+if (length(missing) > 0) {
+  message("Installing missing packages: ", paste(missing, collapse = ", "))
+  install.packages(missing)
+}
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(drc)
+library(lme4)
+library(broom)
+library(patchwork)
+library(scales)
+library(knitr)
+library(kableExtra)
+
+conflicted_fns <- c("select", "filter")
+for (fn in conflicted_fns) {
+  if (fn %in% conflicts()) {
+    assign(fn, get(fn, envir = asNamespace("dplyr")), envir = .GlobalEnv)
+  }
+}
+
+theme_set(
+  theme_bw(base_size = 12) +
+    theme(strip.background = element_rect(fill = "grey90"),
+          legend.position = "bottom")
+)
+```
+
+
+## 1.2 Read Plate Assay Data
+
+```{r read-metadata}
+metadata_path <- file.choose()
+cat("Loading:", metadata_path, "\n")
+plate_meta <- read_excel(metadata_path, sheet = "AssayPlateData")
+
+if (is.numeric(plate_meta$Assay_Date)) {
+  plate_meta$Assay_Date <- as.Date(plate_meta$Assay_Date, origin = "1899-12-30")
+} else {
+  plate_meta$Assay_Date <- as.Date(plate_meta$Assay_Date)
+}
+
+cat("Loaded", nrow(plate_meta), "plates across",
+    length(unique(plate_meta$Analyte)), "analyte(s).\n")
+```
+
+## 1.3 Select Analyte
+
+```{r select-analyte}
+analytes <- sort(unique(plate_meta$Analyte))
+
+if (length(analytes) == 1) {
+  selected_analyte <- analytes[1]
+  cat("Single analyte detected:", selected_analyte, "\n")
+} else {
+  cat("Available analytes:\n")
+  for (i in seq_along(analytes)) cat("  ", i, ":", analytes[i], "\n")
+  selection <- menu(analytes, title = "Select an analyte to analyze:")
+  selected_analyte <- analytes[selection]
+}
+
+cat("Selected:", selected_analyte, "\n")
+
+plates <- plate_meta %>%
+  dplyr::filter(Analyte == selected_analyte) %>%
+  arrange(Assay_Date, Plate_No)
+
+cat(nrow(plates), "plates for", selected_analyte,
+    "across", length(unique(plates$Assay_Lot)), "lot(s).\n")
+```
+
+## 1.4 Check Data Structure
+
+```{r check-data}
+required_fields <- c("Plate_ID", "Analyte", "Assay_Lot", "Assay_Date",
+                     "S0_Signal", "Curve_Model")
+missing_fields <- setdiff(required_fields, names(plates))
+if (length(missing_fields) > 0) {
+  stop("Missing required columns: ", paste(missing_fields, collapse = ", "))
+}
+
+dup_ids <- plates$Plate_ID[duplicated(plates$Plate_ID)]
+if (length(dup_ids) > 0) {
+  warning("Duplicate Plate_IDs found: ", paste(dup_ids, collapse = ", "))
+}
+
+conc_cols <- paste0("S", 1:8, "_Conc")
+signal_cols <- paste0("S", 1:8, "_Signal")
+plates$n_standards <- apply(plates[, signal_cols], 1, function(x) sum(!is.na(x)))
+plates$has_ref <- !is.na(plates$Ref_Conc)
+
+has_ref2_cols <- all(c("Ref2_ID", "Ref2_Conc") %in% names(plates))
+if (has_ref2_cols) {
+  plates$has_ref2 <- !is.na(plates$Ref2_Conc)
+} else {
+  plates$has_ref2 <- FALSE
+}
+
+# Build combined reference data for use throughout pipeline
+ref_combined <- NULL
+bridging_refs <- data.frame()
+
+if (sum(plates$has_ref) > 0) {
+  ref1 <- plates %>% dplyr::filter(has_ref) %>%
+    dplyr::select(Plate_ID, Assay_Lot, Assay_Date, Ref_ID, Ref_Conc, Ref_Signal, S0_Signal) %>%
+    rename(ID = Ref_ID, Conc = Ref_Conc, Signal = Ref_Signal)
+  ref_combined <- ref1
+}
+if (has_ref2_cols && sum(plates$has_ref2) > 0) {
+  ref2 <- plates %>% dplyr::filter(has_ref2) %>%
+    dplyr::select(Plate_ID, Assay_Lot, Assay_Date, Ref2_ID, Ref2_Conc, Ref2_Signal, S0_Signal) %>%
+    rename(ID = Ref2_ID, Conc = Ref2_Conc, Signal = Ref2_Signal)
+  ref_combined <- bind_rows(ref_combined, ref2)
+}
+
+if (!is.null(ref_combined)) {
+  ref_lot_coverage <- ref_combined %>%
+    group_by(ID) %>%
+    summarise(lots = paste(unique(Assay_Lot), collapse = ", "),
+              n_lots = length(unique(Assay_Lot)),
+              n_plates = n(), .groups = "drop")
+  bridging_refs <- ref_lot_coverage %>% dplyr::filter(n_lots > 1)
+}
+
+validation_summary <- plates %>%
+  group_by(Assay_Lot) %>%
+  summarise(
+    n_plates = n(),
+    date_range = paste(min(Assay_Date), "to", max(Assay_Date)),
+    n_standards = paste(sort(unique(n_standards)), collapse = ", "),
+    curve_models = paste(sort(unique(Curve_Model[!is.na(Curve_Model)])), collapse = ", "),
+    ref_available = paste0(sum(has_ref), " / ", n()),
+    ref_id = paste(unique(Ref_ID[!is.na(Ref_ID)]), collapse = ", "),
+    ref2_available = if (has_ref2_cols) paste0(sum(has_ref2), " / ", n()) else "N/A",
+    ref2_id = if (has_ref2_cols) paste(unique(Ref2_ID[!is.na(Ref2_ID)]), collapse = ", ") else "-",
+    S0_mean = round(mean(S0_Signal, na.rm = TRUE), 3),
+    S0_CV = round(sd(S0_Signal, na.rm = TRUE) / mean(S0_Signal, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  )
+
+fmt_table(validation_summary,
+      caption = paste("Plate Summary by Lot -", selected_analyte),
+      col.names = c("Assay Lot", "Plates", "Date Range", "# Standards",
+                     "Curve Model(s)", "Ref Available", "Ref ID(s)",
+                     "Ref2 Available", "Ref2 ID(s)", "S0 Mean", "S0 CV%"))
+```
+
+## 1.5 Format Standard Curve Data for Analyses
+
+```{r reshape-curves}
+std_long <- plates %>%
+  dplyr::select(Plate_ID, Assay_Lot, Assay_Date, Curve_Model,
+                all_of(conc_cols), all_of(signal_cols)) %>%
+  pivot_longer(
+    cols = all_of(c(conc_cols, signal_cols)),
+    names_to = c("Standard", ".value"),
+    names_pattern = "(S\\d)_(Conc|Signal)"
+  ) %>%
+  dplyr::filter(!is.na(Conc) & !is.na(Signal)) %>%
+  arrange(Plate_ID, Conc)
+
+cat("Reshaped", nrow(std_long), "standard curve points across",
+    length(unique(std_long$Plate_ID)), "plates.\n")
+```
+
+# Phase 2: Assay Data Processing
+
+## 2.1 Simultaneous Curve Fitting
+
+All standard curves are fitted simultaneously using the drc package, following the methodology of Feng et al. (2019). The shape parameters (upper asymptote, lower asymptote, slope) are shared across all plates, while the curve midpoint (ED50) is allowed to vary per plate. This enforces the assumption that variation manifests as a horizontal shift on the concentration axis rather than a change in curve shape.
+
+If curves were originally fitted with different models (e.g., 4PL and 5PL), the pipeline tests whether a single model fits all plates adequately.
+
+**Identifying plates with poor fit:** Each plate's RMSE measures how well its curve conforms to the shared shape. Plates with unusually high RMSE are identified using the IQR method: Q1 and Q3 are the 25th and 75th percentile RMSE values, IQR is the difference, and plates exceeding Q3 + 1.5 x IQR are classified as outliers (Tukey 1977).
+
+**Interpreting the table:**
+
+- Midpoint (ED50): The concentration at 50% of the curve range. Only parameter varying between plates.
+- RMSE: How well this plate matches the shared curve. Lower = better fit.
+- Max Residual: Largest single deviation between observed and predicted signal.
+
+```{r simultaneous-fit}
+signal_trend <- cor(std_long$Conc, std_long$Signal, method = "spearman")
+
+if (signal_trend < 0) {
+  cat("Competitive assay detected (signal decreases with concentration).\n")
+  assay_type <- "competitive"
+} else {
+  cat("Sandwich assay detected (signal increases with concentration).\n")
+  assay_type <- "sandwich"
+}
+
+recorded_models <- unique(plates$Curve_Model[!is.na(plates$Curve_Model)])
+cat("Curve model(s) recorded:", paste(recorded_models, collapse = ", "), "\n")
+
+mixed_models <- length(setdiff(recorded_models, "Linear")) > 1
+has_linear <- "Linear" %in% recorded_models
+
+if (has_linear) {
+  linear_plates <- plates$Plate_ID[plates$Curve_Model == "Linear" & !is.na(plates$Curve_Model)]
+  cat("\nNote:", length(linear_plates), "plate(s) used Linear model.\n")
+  cat("These cannot be included in the logistic simultaneous fit.\n\n")
+  std_long_logistic <- std_long %>% dplyr::filter(!Plate_ID %in% linear_plates)
+} else {
+  std_long_logistic <- std_long
+  linear_plates <- character(0)
+}
+
+if (assay_type == "competitive") {
+  fct_4pl <- LL.4()
+  fct_5pl <- LL.5()
+} else {
+  fct_4pl <- L.4()
+  fct_5pl <- L.5()
+}
+
+cat("Attempting 4PL simultaneous fit...\n")
+
+fit_4pl <- tryCatch({
+  suppressWarnings(
+    drm(Signal ~ Conc, curveid = Plate_ID, data = std_long_logistic, fct = fct_4pl,
+        pmodels = list(~1, ~1, ~1, ~factor(Plate_ID) - 1))
+  )
+}, error = function(e) { cat("4PL fit failed:", e$message, "\n"); NULL })
+
+fit_4pl_ok <- FALSE
+fit_5pl <- NULL
+fit_5pl_ok <- FALSE
+
+if (!is.null(fit_4pl)) {
+  resid_4pl <- std_long_logistic %>%
+    mutate(fitted = fitted(fit_4pl), residual = residuals(fit_4pl)) %>%
+    group_by(Plate_ID) %>%
+    summarise(RMSE = sqrt(mean(residual^2)), .groups = "drop") %>%
+    left_join(plates %>% dplyr::select(Plate_ID, Curve_Model), by = "Plate_ID")
+
+  overall_rmse_4pl <- sqrt(mean(residuals(fit_4pl)^2))
+
+  if (mixed_models && "5PL" %in% recorded_models) {
+    plates_5pl_resid <- resid_4pl %>% dplyr::filter(Curve_Model == "5PL")
+    plates_4pl_resid <- resid_4pl %>% dplyr::filter(Curve_Model == "4PL")
+    if (nrow(plates_5pl_resid) > 0 && nrow(plates_4pl_resid) > 0) {
+      median_rmse_4pl_plates <- median(plates_4pl_resid$RMSE)
+      n_poor <- sum(plates_5pl_resid$RMSE > 2 * median_rmse_4pl_plates)
+      if (n_poor == 0) {
+        cat("4PL adequate for all plates including those originally fitted as 5PL.\n\n")
+        fit_4pl_ok <- TRUE
+      } else {
+        cat(n_poor, "plate(s) originally 5PL show poor residuals under 4PL.\n")
+        cat("Testing 5PL...\n\n")
+      }
+    } else { fit_4pl_ok <- TRUE }
+  } else { fit_4pl_ok <- TRUE }
+
+  if (fit_4pl_ok) cat("4PL simultaneous fit accepted.\n\n")
+}
+
+if (!is.null(fit_4pl) && !fit_4pl_ok) {
+  cat("Attempting 5PL simultaneous fit...\n")
+  fit_5pl <- tryCatch({
+    suppressWarnings(
+      drm(Signal ~ Conc, curveid = Plate_ID, data = std_long_logistic, fct = fct_5pl,
+          pmodels = list(~1, ~1, ~1, ~factor(Plate_ID) - 1, ~1))
+    )
+  }, error = function(e) { cat("5PL fit failed:", e$message, "\n"); NULL })
+
+  if (!is.null(fit_5pl)) {
+    overall_rmse_5pl <- sqrt(mean(residuals(fit_5pl)^2))
+    if (overall_rmse_5pl < overall_rmse_4pl) {
+      cat("5PL better (RMSE:", round(overall_rmse_5pl, 4), "vs 4PL:", round(overall_rmse_4pl, 4), ").\n\n")
+      fit_5pl_ok <- TRUE
+    } else {
+      cat("5PL did not improve fit. Reverting to 4PL.\n\n")
+      fit_4pl_ok <- TRUE
+    }
+  }
+}
+
+if (fit_4pl_ok && !is.null(fit_4pl)) {
+  sim_fit <- fit_4pl; sim_model <- "4PL"
+  cat("Final model: 4PL simultaneous fit\n\n")
+} else if (fit_5pl_ok && !is.null(fit_5pl)) {
+  sim_fit <- fit_5pl; sim_model <- "5PL"
+  cat("Final model: 5PL simultaneous fit\n\n")
+} else if (!is.null(fit_4pl)) {
+  sim_fit <- fit_4pl; sim_model <- "4PL (with reservations)"
+  cat("Final model: 4PL (with reservations). Some plates may not fit well.\n\n")
+} else {
+  sim_fit <- NULL; sim_model <- "FAILED"
+  cat("\nSimultaneous fit did not converge. Correction options:\n")
+  cat("  1. Re-analyze original data using a single curve model (requires raw signals).\n")
+  cat("  2. Use ELISAtools (Feng et al. 2019) with raw plate reader output.\n")
+  cat("  3. Use Tier 2 (bridging sample correction) where available.\n")
+}
+
+if (!is.null(sim_fit)) {
+  shared_params <- coef(sim_fit)
+  param_names <- names(shared_params)
+  b_shared <- shared_params[grep("^b:", param_names)]
+  c_shared <- shared_params[grep("^c:", param_names)]
+  d_shared <- shared_params[grep("^d:", param_names)]
+
+  cat("Shared curve parameters:\n")
+  cat("  Upper asymptote (d):", round(d_shared, 3), "\n")
+  cat("  Lower asymptote (c):", round(c_shared, 3), "\n")
+  cat("  Slope (b):", round(b_shared, 3), "\n")
+  if (sim_model == "5PL") {
+    f_shared <- shared_params[grep("^f:", param_names)]
+    cat("  Asymmetry (f):", round(f_shared, 3), "\n")
+  }
+  cat("\n")
+
+  e_params <- shared_params[grep("^e:", param_names)]
+  plate_ids_from_params <- gsub("^e:factor\\(Plate_ID\\)", "", names(e_params))
+
+  plate_midpoints <- data.frame(
+    Plate_ID = plate_ids_from_params,
+    midpoint = as.numeric(e_params), stringsAsFactors = FALSE
+  ) %>% left_join(plates %>% dplyr::select(Plate_ID, Assay_Lot, Assay_Date), by = "Plate_ID")
+
+  fitted_vals <- fitted(sim_fit)
+  residuals_all <- residuals(sim_fit)
+
+  plate_residuals <- std_long_logistic %>%
+    mutate(fitted = fitted_vals, residual = residuals_all) %>%
+    group_by(Plate_ID) %>%
+    summarise(RMSE = round(sqrt(mean(residual^2)), 4),
+              max_resid = round(max(abs(residual)), 4),
+              n_points = n(), .groups = "drop")
+
+  plate_midpoints <- plate_midpoints %>% left_join(plate_residuals, by = "Plate_ID")
+
+  print(fmt_table(plate_midpoints %>%
+          dplyr::select(Plate_ID, Assay_Lot, midpoint, RMSE, max_resid),
+        caption = paste("Per-Plate Midpoints and Fit Quality -", sim_model),
+        digits = 4,
+        col.names = c("Plate ID", "Lot", "Midpoint (ED50)", "RMSE", "Max Residual")))
+
+  rmse_values <- plate_residuals$RMSE
+  q75 <- quantile(rmse_values, 0.75)
+  q25 <- quantile(rmse_values, 0.25)
+  iqr <- q75 - q25
+  upper_fence <- q75 + 1.5 * iqr
+
+  high_resid_plates <- plate_residuals %>% dplyr::filter(RMSE > upper_fence)
+
+  cat("RMSE outlier detection: Q1 =", round(q25, 4), ", Q3 =", round(q75, 4),
+      ", IQR =", round(iqr, 4), ", threshold =", round(upper_fence, 4), "\n")
+
+  if (nrow(high_resid_plates) > 0) {
+    cat("\nPlates exceeding the outlier threshold (Q3 + 1.5 x IQR =",
+        round(upper_fence, 4), "):\n")
+    for (i in seq_len(nrow(high_resid_plates))) {
+      r <- high_resid_plates[i, ]
+      cat("  ", r$Plate_ID, "- RMSE =", r$RMSE, "\n")
+    }
+    cat("\n  These plates are excluded from the reference lot median\n")
+    cat("  calculation but still receive per-plate correction factors.\n")
+    cat("  Samples on these plates should be identified and their\n")
+    cat("  corrected values treated with caution.\n")
+  } else {
+    cat("\nAll plates fit the shared-shape model within expected bounds.\n")
+    if (sum(plates$has_ref) > 0 || sum(plates$has_ref2) > 0) {
+      cat("Phase 2.2 will evaluate whether the shared model improves\n")
+      cat("prediction consistency using reference sample data.\n")
+    } else {
+      cat("No reference samples are available to independently validate\n")
+      cat("the shared model. The curve overlay plots in Phase 3 provide\n")
+      cat("visual assessment of the fit quality.\n")
+    }
+  }
+}
+```
+
+## 2.2 Reference Sample Consistency Check
+
+This step evaluates whether the simultaneous shared-shape model produces more consistent predictions than the original individual curve fits. If the predicted CV is lower than the reported CV, the shared model captures real variation and Tier 1 correction is supported. If the CV increases, the shared-shape assumption may not hold, and Tier 2 (bridging sample correction) should be considered.
+
+Flagged plates in the table indicate where the shared model diverges from the original fit. A single asterisk (*) marks differences over 10%; double asterisk (**) over 20%. Large or frequent flags indicate curves differ in shape across lots, supporting Tier 2 over Tier 1.
+
+```{r validate-ref}
+if (is.null(sim_fit)) {
+  cat("Simultaneous fit not available. Skipping.\n")
+} else if (sum(plates$has_ref) == 0 && sum(plates$has_ref2) == 0) {
+  cat("\nNo biological reference samples in this dataset.\n")
+  cat("Fit quality can be assessed in the overlay plots (Phase 3).\n")
+} else {
+  ref_validation <- NULL
+  if (sum(plates$has_ref) > 0) {
+    ref_validation <- plates %>% dplyr::filter(has_ref) %>%
+      dplyr::select(Plate_ID, Assay_Lot, Ref_ID, Ref_Conc, Ref_Signal) %>%
+      rename(ID = Ref_ID, Conc = Ref_Conc, Signal = Ref_Signal)
+  }
+  if (has_ref2_cols && sum(plates$has_ref2) > 0) {
+    ref2_rows <- plates %>% dplyr::filter(has_ref2) %>%
+      dplyr::select(Plate_ID, Assay_Lot, Ref2_ID, Ref2_Conc, Ref2_Signal) %>%
+      rename(ID = Ref2_ID, Conc = Ref2_Conc, Signal = Ref2_Signal)
+    ref_validation <- bind_rows(ref_validation, ref2_rows)
+  }
+
+  ref_validation <- ref_validation %>%
+    left_join(plate_midpoints %>% dplyr::select(Plate_ID, midpoint), by = "Plate_ID") %>%
+    mutate(
+      predicted_conc = if (sim_model == "5PL") {
+        midpoint * (((d_shared - c_shared) / (Signal - c_shared))^(1/f_shared) - 1)^(1/b_shared)
+      } else {
+        midpoint * ((d_shared - c_shared) / (Signal - c_shared) - 1)^(1/b_shared)
+      }
+    )
+
+  ref_ids <- unique(ref_validation$ID)
+
+  cat("\nReference sample consistency check:\n\n")
+  cat("  Reported = original concentration from instrument software\n")
+  cat("  Predicted = concentration from simultaneous shared-shape model\n\n")
+
+  tier1_appropriate <- TRUE
+
+  for (rid in ref_ids) {
+    ref_sub <- ref_validation %>% dplyr::filter(ID == rid)
+    if (nrow(ref_sub) < 2) { cat("  ", rid, "- only 1 plate, CV not calculable.\n"); next }
+    reported_cv <- round(sd(ref_sub$Conc, na.rm = TRUE) / mean(ref_sub$Conc, na.rm = TRUE) * 100, 1)
+    predicted_cv <- round(sd(ref_sub$predicted_conc, na.rm = TRUE) / mean(ref_sub$predicted_conc, na.rm = TRUE) * 100, 1)
+
+    cat("  ", rid, "(n =", nrow(ref_sub), "plates):\n")
+    cat("    Reported CV:", reported_cv, "%\n")
+    cat("    Predicted CV:", predicted_cv, "%\n")
+
+    if (predicted_cv < reported_cv) {
+      cat("    The simultaneous model reduced variability for this reference.\n\n")
+    } else if (predicted_cv == reported_cv) {
+      cat("    No change in variability.\n\n")
+    } else {
+      tier1_appropriate <- FALSE
+      cat("    The simultaneous model increased variability. The shared-shape\n")
+      cat("    assumption may not hold for this analyte. Tier 2 (bridging sample\n")
+      cat("    correction) should be considered as the primary correction method\n")
+      cat("    if reference sample data is available across lots.\n\n")
+    }
+  }
+
+  # Per-plate detail table (always show)
+  if (nrow(ref_validation) > 0) {
+    ref_with_model <- ref_validation %>%
+      left_join(plates %>% dplyr::select(Plate_ID, Curve_Model), by = "Plate_ID") %>%
+      mutate(pct_diff = round((predicted_conc - Conc) / Conc * 100, 1),
+             flag = ifelse(abs(pct_diff) > 20, "**", ifelse(abs(pct_diff) > 10, "*", "")))
+
+    display_cols <- ref_with_model %>%
+      dplyr::select(Plate_ID, Assay_Lot, Curve_Model, Conc, predicted_conc, pct_diff, flag)
+
+    print(fmt_table(display_cols,
+          caption = "Per-Plate Reference Sample: Reported vs. Shared Model Prediction",
+          digits = 4,
+          col.names = c("Plate ID", "Lot", "Original Model", "Reported Conc",
+                         "Predicted Conc", "% Difference", "")))
+  }
+
+  # Mixed model messaging (conditional)
+  if (mixed_models && nrow(ref_validation) > 0) {
+    cat("\nMixed curve models detected (", paste(recorded_models, collapse = ", "), ").\n")
+    cat("The simultaneous fit selected", sim_model, ".\n\n")
+
+    for (mod in recorded_models) {
+      mod_sub <- ref_with_model %>% dplyr::filter(Curve_Model == mod)
+      if (nrow(mod_sub) > 0) {
+        median_diff <- round(median(abs(mod_sub$pct_diff), na.rm = TRUE), 1)
+        cat("  Plates originally fitted as", mod, ": median difference =", median_diff, "%\n")
+      }
+    }
+  }
+}
+```
+
+# Phase 3: Visual Diagnostics
+
+## 3.1 Standard Curve Overlay by Lot
+
+```{r plot-curve-overlay, fig.height=8}
+if (!is.null(sim_fit)) {
+  pred_range <- std_long_logistic %>%
+    group_by(Plate_ID) %>%
+    summarise(min_conc = min(Conc), max_conc = max(Conc), .groups = "drop")
+
+  curve_predictions <- lapply(unique(pred_range$Plate_ID), function(pid) {
+    pr <- pred_range %>% dplyr::filter(Plate_ID == pid)
+    new_conc <- seq(pr$min_conc, pr$max_conc, length.out = 200)
+    tryCatch({
+      pred_signal <- predict(sim_fit, newdata = data.frame(
+        Conc = new_conc,
+        Plate_ID = factor(pid, levels = levels(factor(std_long_logistic$Plate_ID)))))
+      lot <- plates$Assay_Lot[plates$Plate_ID == pid]
+      data.frame(Plate_ID = pid, Assay_Lot = lot, Conc = new_conc, Signal = pred_signal)
+    }, error = function(e) NULL)
+  }) %>% bind_rows()
+
+  if (nrow(curve_predictions) > 0) {
+    p_overlay <- ggplot(curve_predictions,
+                        aes(x = Conc, y = Signal, group = Plate_ID, color = Plate_ID)) +
+      geom_line(alpha = 0.7, linewidth = 0.5) +
+      facet_wrap(~ Assay_Lot) + ylim(0, 100) + scale_x_log10() +
+      labs(title = paste(selected_analyte, "- Fitted Standard Curves by Lot"),
+           x = paste0("Concentration (", plates$Conc_Units[1], ")"),
+           y = paste0("Signal (", plates$Signal_Units[1], ")")) +
+      theme(legend.position = "none")
+
+    p_overlay_all <- ggplot(curve_predictions,
+                            aes(x = Conc, y = Signal, group = Plate_ID, color = Assay_Lot)) +
+      geom_line(alpha = 0.5, linewidth = 0.4) + scale_x_log10() +
+      labs(title = paste(selected_analyte, "- All Lots Overlaid"),
+           x = paste0("Concentration (", plates$Conc_Units[1], ")"),
+           y = paste0("Signal (", plates$Signal_Units[1], ")"),
+           color = "Assay Lot")
+
+    print(p_overlay / p_overlay_all)
+  }
+}
+```
+
+## 3.2 S0 Signal (Assay Sensitivity) Over Time
+
+For competitive assays, S0 is maximum binding (higher = more sensitive). For sandwich assays, S0 is background (lower = better). Consistency within a lot reflects plate-to-plate reproducibility; shifts between lots indicate reagent or performance changes.
+
+```{r plot-s0-over-time, fig.height=5}
+s0_lot_means <- plates %>%
+  group_by(Assay_Lot) %>%
+  summarise(mean_s0 = mean(S0_Signal, na.rm = TRUE), .groups = "drop")
+
+p_s0 <- ggplot(plates, aes(x = Assay_Date, y = S0_Signal, color = Assay_Lot)) +
+  geom_point(size = 2.5) +
+  geom_hline(data = s0_lot_means, aes(yintercept = mean_s0, color = Assay_Lot),
+             linetype = "dashed", alpha = 0.6) +
+  labs(title = paste(selected_analyte, "- S0 Signal Across Plates"),
+       subtitle = "Shifts in S0 between lots may indicate changes in reagent performance",
+       x = "Assay Date", y = "S0 Signal (OD)", color = "Assay Lot") +
+  scale_x_date(date_labels = "%b %Y")
+print(p_s0)
+```
+
+## 3.3 Per-Plate Midpoints by Lot
+
+The midpoint (ED50) is the only parameter varying between plates in the simultaneous fit. Tight clustering within a lot reflects plate-to-plate consistency. Separation between lots reflects the lot-to-lot shift the correction addresses. Plates flagged with poor fit in Phase 2 are marked with X. This plot guides reference lot selection when Tier 1 is supported.
+
+```{r midpoint-by-lot, fig.height=5}
+if (!is.null(plate_midpoints)) {
+  plot_data <- plate_midpoints %>%
+    mutate(flagged = Plate_ID %in% high_resid_plates$Plate_ID)
+
+  p_mid <- ggplot(plot_data,
+                  aes(x = Assay_Lot, y = midpoint, color = Assay_Lot)) +
+    geom_jitter(aes(shape = flagged), width = 0.15, size = 3) +
+    scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 4),
+                       labels = c("Good fit", "Poor fit"),
+                       name = "Fit Quality") +
+    labs(title = paste(selected_analyte, "- Per-Plate Midpoints by Lot"),
+         subtitle = "Tighter clustering = more stable baseline for Tier 1 correction",
+         x = "Assay Lot", y = "Midpoint (ED50)") +
+    guides(color = "none") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  print(p_mid)
+}
+```
+
+## 3.4 Reference Sample Distribution by Lot
+
+This plot guides reference lot selection when Tier 2 is recommended. It shows how consistently each lot measures the same biological reference sample. The lot with the lowest CV and sufficient plate count provides the most stable baseline for Tier 2 correction.
+
+```{r ref-by-lot, fig.height=6}
+if (!is.null(ref_combined) && nrow(ref_combined) > 0) {
+  cv_labels <- ref_combined %>%
+    group_by(Assay_Lot, ID) %>%
+    dplyr::filter(n() > 1) %>%
+    summarise(
+      cv = round(sd(Conc, na.rm = TRUE) / mean(Conc, na.rm = TRUE) * 100, 1),
+      y_pos = max(Conc, na.rm = TRUE),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(label = paste0("CV=", cv, "%\nn=", n))
+
+  p_ref_lot <- ggplot(ref_combined, aes(x = Assay_Lot, y = Conc, fill = Assay_Lot)) +
+    geom_boxplot(alpha = 0.4, outlier.shape = NA) +
+    geom_jitter(width = 0.15, size = 2.5) +
+    geom_text(data = cv_labels,
+              aes(x = Assay_Lot, y = y_pos, label = label),
+              inherit.aes = FALSE, vjust = -0.3, size = 3) +
+    facet_wrap(~ ID, scales = "free_y") +
+    labs(title = paste(selected_analyte, "- Reference Sample Concentration by Lot"),
+         subtitle = "Lower CV = more consistent measurement; guides reference lot and sample selection",
+         x = "Assay Lot",
+         y = paste0("Reference Conc (", plates$Conc_Units[1], ")")) +
+    guides(fill = "none") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))
+
+  print(p_ref_lot)
+} else {
+  cat("No reference sample data available for this plot.\n")
+}
+```
+
+## 3.5 Select Reference Lot
+
+The reference lot defines the baseline scale for all corrected values. This choice sets the absolute scale, not the relative relationships between plates. Any concentration thresholds derived from corrected data are anchored to this scale, and future data should be corrected to the same reference lot.
+
+**If maintaining consistency:** If a lot was the reference in previous analyses or publications, keep it.
+
+**If Phase 2.2 supports Tier 1 (shared-shape model reduced variability):** Prefer the lot with the tightest midpoint clustering (3.3) and the most plates for a stable median.
+
+**If Phase 2.2 recommends Tier 2 (shared-shape model increased variability):** Prefer the lot with the lowest reference sample CV (3.4), sufficient plate count, and reference sample coverage across the most lots. The selected lot must have reference sample data for Tier 2 to function.
+
+**If a fundamental assay change occurred** (e.g., new antibody): the affected lots may not fit the shared-shape model. A new reference lot may be warranted, creating two separate analytical eras that should be documented (Wilson et al. 2021).
+
+```{r lot-decision-summary}
+lot_decision <- plates %>%
+  group_by(Assay_Lot) %>%
+  summarise(
+    n_plates = n(),
+    date_range = paste(min(Assay_Date), "to", max(Assay_Date)),
+    .groups = "drop"
+  )
+
+if (!is.null(ref_combined) && nrow(ref_combined) > 0) {
+  ref_cvs <- ref_combined %>%
+    group_by(Assay_Lot, ID) %>%
+    dplyr::filter(n() > 1) %>%
+    summarise(
+      cv = round(sd(Conc, na.rm = TRUE) / mean(Conc, na.rm = TRUE) * 100, 1),
+      n_ref = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(ref_info = paste0(ID, ": ", cv, "% (n=", n_ref, ")")) %>%
+    group_by(Assay_Lot) %>%
+    summarise(ref_cv = paste(ref_info, collapse = "; "), .groups = "drop")
+
+  lot_decision <- lot_decision %>%
+    left_join(ref_cvs, by = "Assay_Lot") %>%
+    mutate(ref_cv = ifelse(is.na(ref_cv), "No reference data", ref_cv))
+} else {
+  lot_decision$ref_cv <- "No reference data"
+}
+
+tbl_out <- print(fmt_table(lot_decision,
+      caption = paste("Lot Selection Summary -", selected_analyte),
+      col.names = c("Assay Lot", "Plates", "Date Range", "Reference Sample CV")))
+
+if (exists("tier1_appropriate") && !tier1_appropriate) {
+  no_ref_lots <- lot_decision %>% dplyr::filter(ref_cv == "No reference data")
+  if (nrow(no_ref_lots) > 0) {
+    cat("\nTier 2 is recommended for this analyte. Lots without reference\n")
+    cat("data (", paste(no_ref_lots$Assay_Lot, collapse = ", "),
+        ") cannot serve as the reference lot.\n")
+  }
+}
+```
+
+```{r reference-lot-prompt}
+lots <- lot_decision$Assay_Lot
+selection <- menu(lots, title = "Which lot should serve as the reference (baseline)?")
+reference_lot <- lots[selection]
+cat("Reference lot set to:", reference_lot, "\n")
+
+if (!is.null(ref_combined) && nrow(ref_combined) > 0) {
+  ref_in_selected <- ref_combined %>% dplyr::filter(Assay_Lot == reference_lot)
+  if (nrow(ref_in_selected) == 0) {
+    cat("\nWarning: Selected lot has no reference sample data.\n")
+    cat("Tier 2 correction will not be available.\n")
+  } else {
+    cat("Reference sample(s) in selected lot:",
+        paste(unique(ref_in_selected$ID), collapse = ", "), "\n")
+  }
+}
+```
+
+# Phase 4: Correction Factor Calculation
+
+## 4.1 Tier 1 -- Standard Curve Shift Factor
+
+The shift factor for each plate is the ratio of the reference lot's median midpoint to that plate's midpoint. Every plate receives its own correction. Plates flagged in Phase 2 are excluded from the reference lot median but still receive per-plate factors. Corrected values from flagged plates carry more uncertainty.
+
+```{r tier1-shift-factor}
+if (is.null(sim_fit)) {
+  cat("Tier 1 not available - simultaneous fit did not converge.\n")
+  shift_factors <- NULL
+} else {
+  flagged_in_ref <- high_resid_plates$Plate_ID[
+    high_resid_plates$Plate_ID %in% plate_midpoints$Plate_ID[plate_midpoints$Assay_Lot == reference_lot]]
+
+  ref_lot_midpoints <- plate_midpoints %>%
+    dplyr::filter(Assay_Lot == reference_lot, !Plate_ID %in% high_resid_plates$Plate_ID)
+  ref_median_midpoint <- median(ref_lot_midpoints$midpoint)
+
+  cat("Reference lot median midpoint (ED50):", round(ref_median_midpoint, 4), "\n")
+  cat("Based on", nrow(ref_lot_midpoints), "of",
+      sum(plate_midpoints$Assay_Lot == reference_lot), "plates in the reference lot.\n")
+
+  if (length(flagged_in_ref) > 0) {
+    cat("Excluded from median:", paste(flagged_in_ref, collapse = ", "), "\n")
+  }
+  cat("\n")
+
+  shift_factors <- plate_midpoints %>%
+    mutate(
+      shift_factor = ref_median_midpoint / midpoint,
+      correction_factor = shift_factor,
+      basis = ifelse(Plate_ID %in% high_resid_plates$Plate_ID,
+                     "Per-plate (flagged)", "Per-plate")
+    )
+
+  lot_sf_summary <- shift_factors %>%
+    group_by(Assay_Lot) %>%
+    summarise(n = n(),
+              median_sf = round(median(shift_factor), 4),
+              range_sf = paste(round(min(shift_factor), 4), "to",
+                               round(max(shift_factor), 4)),
+              .groups = "drop")
+
+  print(fmt_table(lot_sf_summary, caption = "Shift Factor Summary by Lot",
+        col.names = c("Lot", "Plates", "Median Shift Factor", "Range")))
+
+  cat("\nInterpretation:\n")
+  for (i in seq_len(nrow(lot_sf_summary))) {
+    r <- lot_sf_summary[i, ]
+    if (r$Assay_Lot == reference_lot) {
+      cat("  ", r$Assay_Lot, "(reference): plates corrected toward this lot's median.\n")
+    } else if (abs(r$median_sf - 1.0) < 0.05) {
+      cat("  ", r$Assay_Lot, ": minimal shift from reference. Corrections will be small.\n")
+    } else {
+      direction <- ifelse(r$median_sf > 1, "upward", "downward")
+      pct <- round((r$median_sf - 1) * 100, 0)
+      cat("  ", r$Assay_Lot, ": median", direction, "correction of ~", abs(pct), "%.\n")
+    }
+  }
+
+  if (length(flagged_in_ref) > 0) {
+    cat("\nNote: Flagged plate(s)", paste(flagged_in_ref, collapse = ", "),
+        "are excluded from the\n")
+    cat("reference lot median but still receive per-plate correction factors.\n")
+    cat("Samples on these plates should be identified and their corrected\n")
+    cat("values treated with caution.\n")
+  }
+
+  if (exists("tier1_appropriate") && !tier1_appropriate) {
+    cat("\nNote: Phase 2.2 indicated that the shared-shape assumption may\n")
+    cat("not hold for this analyte. The shift factors above are shown for\n")
+    cat("diagnostic purposes but Tier 2 (bridging sample correction) is\n")
+    cat("recommended as the primary correction method.\n")
+  }
+}
+```
+
+## 4.2 Tier 2 -- Bridging Sample Correction
+
+Tier 2 calculates a per-plate correction factor from biological reference samples: the reference lot's mean concentration divided by each plate's concentration for the same sample (Henson et al. 2022). This does not depend on curve shape assumptions. 
+
+The quality of the correction depends on how precisely the reference lot's mean is estimated (within-lot CV) and how consistently the reference sample was measured across the dataset. The primary reference sample is typcially selected based on broadest lot coverage.
+
+```{r tier2-ref-ratio}
+ref_ratios <- NULL
+ref_ratios_valid <- NULL
+plate_tier2 <- NULL
+
+if (!exists("ref_combined") || is.null(ref_combined) || nrow(ref_combined) == 0) {
+  cat("\nTier 2 not available. No reference sample data in this dataset.\n")
+} else {
+  ref_lot_ref_data <- ref_combined %>% dplyr::filter(Assay_Lot == reference_lot)
+  ref_lot_ref_ids <- unique(ref_lot_ref_data$ID)
+
+  has_cross_ratio <- FALSE
+  cross_ratio_value <- NA_real_
+  cross_ref1_id <- NULL
+  cross_ref2_id <- NULL
+
+  if (has_ref2_cols) {
+    dual_ref_plates <- plates %>% dplyr::filter(has_ref & has_ref2)
+    if (nrow(dual_ref_plates) > 0) {
+      ratios <- dual_ref_plates$Ref_Conc / dual_ref_plates$Ref2_Conc
+      cross_ratio_value <- mean(ratios)
+      cross_ref1_id <- unique(dual_ref_plates$Ref_ID)
+      cross_ref2_id <- unique(dual_ref_plates$Ref2_ID)
+      has_cross_ratio <- TRUE
+    }
+  }
+
+  if (length(ref_lot_ref_ids) == 0 && !has_cross_ratio) {
+    cat("\nTier 2 not available. Reference lot (", reference_lot,
+        ") has no reference data and no cross-reference bridging exists.\n")
+  } else {
+
+    # Anchor quality
+    ref_lot_summary <- ref_lot_ref_data %>%
+      group_by(ID) %>%
+      summarise(
+        n_plates = n(),
+        mean_conc = round(mean(Conc, na.rm = TRUE), 4),
+        cv = ifelse(n() > 1,
+          round(sd(Conc, na.rm = TRUE) / mean(Conc, na.rm = TRUE) * 100, 1), NA),
+        .groups = "drop"
+      )
+
+    high_cv_anchor <- any(ref_lot_summary$cv > 20, na.rm = TRUE)
+
+    ref_lot_means <- ref_lot_summary %>% dplyr::select(ID, mean_conc)
+
+    # Select primary reference by lot coverage
+    ref_lot_span <- ref_combined %>%
+      group_by(ID) %>%
+      summarise(n_lots = length(unique(Assay_Lot)), n_plates = n(), .groups = "drop") %>%
+      arrange(desc(n_lots), desc(n_plates))
+
+    preferred_ref <- ref_lot_span$ID[1]
+
+    cat("Reference sample coverage:\n")
+    for (i in seq_len(nrow(ref_lot_span))) {
+      r <- ref_lot_span[i, ]
+      anchor <- ref_lot_summary %>% dplyr::filter(ID == r$ID)
+      marker <- ifelse(r$ID == preferred_ref, " <-- primary", "")
+      if (nrow(anchor) > 0 && !is.na(anchor$cv)) {
+        cat("  ", r$ID, ":", r$n_lots, "lots,", r$n_plates, "plates,",
+            "anchor CV =", anchor$cv, "%", marker, "\n")
+      } else {
+        cat("  ", r$ID, ":", r$n_lots, "lots,", r$n_plates, "plates,",
+            "not in reference lot", marker, "\n")
+      }
+    }
+
+    if (high_cv_anchor) {
+      cat("\nNote: Reference lot anchor CV > 20% for one or more samples.\n")
+      cat("All correction factors inherit this imprecision.\n")
+    }
+    cat("\n")
+
+    # Calculate ratios
+    ref_ratios <- ref_combined %>%
+      mutate(ref_ratio = NA_real_, ratio_basis = NA_character_)
+
+    for (i in seq_len(nrow(ref_ratios))) {
+      rid <- ref_ratios$ID[i]
+      if (rid %in% ref_lot_means$ID) {
+        ref_mean <- ref_lot_means$mean_conc[ref_lot_means$ID == rid]
+        ref_ratios$ref_ratio[i] <- ref_mean / ref_ratios$Conc[i]
+        ref_ratios$ratio_basis[i] <- "Direct"
+      } else if (has_cross_ratio) {
+        if (rid %in% cross_ref2_id && any(cross_ref1_id %in% ref_lot_means$ID)) {
+          ref1_id <- cross_ref1_id[cross_ref1_id %in% ref_lot_means$ID][1]
+          ref_mean <- ref_lot_means$mean_conc[ref_lot_means$ID == ref1_id]
+          equivalent_conc <- ref_ratios$Conc[i] * cross_ratio_value
+          ref_ratios$ref_ratio[i] <- ref_mean / equivalent_conc
+          ref_ratios$ratio_basis[i] <- paste0("Indirect (via ", ref1_id, ")")
+        } else if (rid %in% cross_ref1_id && any(cross_ref2_id %in% ref_lot_means$ID)) {
+          ref2_id <- cross_ref2_id[cross_ref2_id %in% ref_lot_means$ID][1]
+          ref_mean <- ref_lot_means$mean_conc[ref_lot_means$ID == ref2_id]
+          equivalent_conc <- ref_ratios$Conc[i] / cross_ratio_value
+          ref_ratios$ref_ratio[i] <- ref_mean / equivalent_conc
+          ref_ratios$ratio_basis[i] <- paste0("Indirect (via ", ref2_id, ")")
+        }
+      }
+    }
+
+    ref_ratios_valid <- ref_ratios %>% dplyr::filter(!is.na(ref_ratio))
+
+    if (nrow(ref_ratios_valid) > 0) {
+
+      # Compare references on shared plates (diagnostic)
+      refs_per_plate <- ref_ratios_valid %>%
+        group_by(Plate_ID) %>%
+        summarise(n_refs = length(unique(ID)), .groups = "drop")
+      multi_ref_plates <- refs_per_plate %>% dplyr::filter(n_refs > 1)
+
+      if (nrow(multi_ref_plates) > 0) {
+        multi_ref_data <- ref_ratios_valid %>%
+          dplyr::filter(Plate_ID %in% multi_ref_plates$Plate_ID) %>%
+          dplyr::select(Plate_ID, ID, ref_ratio) %>%
+          pivot_wider(names_from = ID, values_from = ref_ratio)
+
+        ref_names <- setdiff(names(multi_ref_data), "Plate_ID")
+
+        if (length(ref_names) == 2) {
+          multi_ref_data <- multi_ref_data %>%
+            mutate(
+              pct_diff = round(abs(.data[[ref_names[1]]] - .data[[ref_names[2]]]) /
+                pmin(.data[[ref_names[1]]], .data[[ref_names[2]]]) * 100, 1),
+              direction = case_when(
+                (.data[[ref_names[1]]] > 1 & .data[[ref_names[2]]] > 1) ~ "Both up",
+                (.data[[ref_names[1]]] < 1 & .data[[ref_names[2]]] < 1) ~ "Both down",
+                TRUE ~ "Opposite"
+              )
+            )
+
+          print(fmt_table(multi_ref_data, digits = 4,
+                caption = "Diagnostic: Correction Ratios from Two References on Same Plate",
+                col.names = c("Plate ID", ref_names, "% Difference", "Direction")))
+
+          n_opposite <- sum(multi_ref_data$direction == "Opposite")
+          n_total <- nrow(multi_ref_data)
+          median_diff <- round(median(multi_ref_data$pct_diff, na.rm = TRUE), 1)
+
+          cat("\nOn", n_total, "plates both references were measured.\n")
+          cat("  Median difference in correction magnitude:", median_diff, "%\n")
+          cat("  Plates where references disagree on direction:", n_opposite, "of", n_total, "\n\n")
+
+          if (n_opposite > 0 || median_diff > 10) {
+            cat("  The two references do not consistently agree on how to correct\n")
+            cat("  these plates. This may indicate a technical issue with one\n")
+            cat("  reference sample, or a concentration-dependent lot effect\n")
+            cat("  (Henson et al. 2022). Review the reference sample boxplots in\n")
+            cat("  Phase 3.4 to assess whether one reference is less consistent.\n")
+          } else {
+            cat("  Good agreement. Both references support the same correction.\n")
+          }
+        }
+      }
+      
+      if (nrow(ref_lot_span) > 1) {
+      cat("\n")
+      ref_selection <- menu(ref_lot_span$ID,
+                            title = "Select the primary reference sample for correction:")
+      preferred_ref <- ref_lot_span$ID[ref_selection]
+    }
+    cat("Reference selected:", preferred_ref, "\n\n")
+
+      # Collapse to one ratio per plate using primary reference
+      plate_tier2 <- ref_ratios_valid %>%
+        mutate(is_preferred = (ID == preferred_ref)) %>%
+        arrange(Plate_ID, desc(is_preferred)) %>%
+        group_by(Plate_ID) %>%
+        slice(1) %>%
+        ungroup() %>%
+        dplyr::select(Plate_ID, Assay_Lot, ID, Conc, ref_ratio, ratio_basis)
+
+      print(fmt_table(plate_tier2,
+            caption = "Tier 2: Per-Plate Correction Factors",
+            digits = 4,
+            col.names = c("Plate ID", "Lot", "Ref Used", "Ref Conc",
+                           "Correction Factor", "Basis")))
+
+      # Handle plates without reference data
+      plates_with_t2 <- unique(plate_tier2$Plate_ID)
+      plates_without_t2 <- setdiff(plates$Plate_ID, plates_with_t2)
+
+      cat("\nTier 2 coverage:", length(plates_with_t2), "of", nrow(plates), "plates.\n")
+
+      if (length(plates_without_t2) > 0) {
+        lot_median_t2 <- plate_tier2 %>%
+          group_by(Assay_Lot) %>%
+          summarise(lot_median_ratio = median(ref_ratio, na.rm = TRUE),
+                    n_in_lot = n(), .groups = "drop")
+
+        cat("Plates without reference sample data:\n\n")
+
+        fallback_rows <- data.frame(
+          Plate_ID = character(), Assay_Lot = character(),
+          ID = character(), Conc = numeric(),
+          ref_ratio = numeric(), ratio_basis = character(),
+          stringsAsFactors = FALSE)
+
+        for (pid in plates_without_t2) {
+          plt_lot <- plates$Assay_Lot[plates$Plate_ID == pid]
+          lot_med <- lot_median_t2$lot_median_ratio[lot_median_t2$Assay_Lot == plt_lot]
+
+          if (length(lot_med) > 0) {
+            n_lot <- lot_median_t2$n_in_lot[lot_median_t2$Assay_Lot == plt_lot]
+            cat("  ", pid, "(", plt_lot, "): lot median =",
+                round(lot_med, 4), "(based on", n_lot, "plates)\n")
+            fallback_rows <- rbind(fallback_rows, data.frame(
+              Plate_ID = pid, Assay_Lot = plt_lot,
+              ID = NA_character_, Conc = NA_real_,
+              ref_ratio = lot_med,
+              ratio_basis = "Lot median (no reference)",
+              stringsAsFactors = FALSE))
+          } else {
+            cat("  ", pid, "(", plt_lot, "): no Tier 2 data in this lot.\n")
+            if (exists("tier1_appropriate") && !tier1_appropriate) {
+              cat("    Neither Tier 1 nor Tier 2 can reliably correct this plate.\n")
+              cat("    Values should be used with caution.\n")
+            } else {
+              cat("    Tier 1 shift factor will be used as fallback.\n")
+            }
+          }
+        }
+
+        if (nrow(fallback_rows) > 0) {
+          plate_tier2 <- bind_rows(plate_tier2, fallback_rows)
+        }
+      }
+
+      # Limitations
+      cat("\nLimitations:\n")
+      cat("  The ratio correction assumes the lot effect is a constant\n")
+      cat("  multiplier across all concentrations. If the lot effect is\n")
+      cat("  concentration-dependent, this is an approximation.\n")
+      if (high_cv_anchor) {
+        cat("  The reference lot anchor has high within-lot CV (>20%).\n")
+        cat("  All correction factors inherit this imprecision.\n")
+      }
+      cat("  See Henson et al. (2022) for discussion.\n")
+
+    } else {
+      cat("\nNo Tier 2 ratios could be calculated.\n")
+      if (exists("tier1_appropriate") && !tier1_appropriate) {
+        cat("Tier 1 is also not recommended for this analyte.\n")
+        cat("Correction may not be possible with available data.\n")
+      } else {
+        cat("Tier 1 will be used.\n")
+      }
+    }
+  }
+}
+```
+
+## 4.3 Compare Tier 1 vs. Tier 2
+
+Agreement between correction methods provides confidence. Divergence suggests the lot effect is more complex than a simple curve shift.
+
+```{r compare-tiers, fig.height=6}
+if (is.null(ref_ratios_valid) || is.null(plate_tier2) || nrow(plate_tier2) == 0 || is.null(shift_factors)) {
+  cat("Tier comparison skipped - Tier 2 not available.\n")
+} else {
+  tier_comparison <- shift_factors %>%
+    dplyr::select(Plate_ID, Assay_Lot, correction_factor) %>%
+    rename(tier1_factor = correction_factor) %>%
+    inner_join(plate_tier2 %>% dplyr::select(Plate_ID, ref_ratio), by = "Plate_ID") %>%
+    dplyr::filter(!is.na(tier1_factor) & !is.na(ref_ratio))
+
+  if (nrow(tier_comparison) > 2) {
+    tier_cor <- cor(tier_comparison$tier1_factor, tier_comparison$ref_ratio, use = "complete.obs")
+
+    p_compare <- ggplot(tier_comparison,
+                        aes(x = tier1_factor, y = ref_ratio, color = Assay_Lot)) +
+      geom_point(size = 3) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+      labs(title = paste(selected_analyte, "- Tier 1 vs. Tier 2"),
+           subtitle = paste0("Pearson r = ", round(tier_cor, 3)),
+           x = "Tier 1: Shift Factor", y = "Tier 2: Reference Sample Ratio",
+           color = "Assay Lot")
+    print(p_compare)
+
+    cat("\nCorrelation: r =", round(tier_cor, 3), "\n\n")
+    if (tier_cor > 0.85) cat("Strong agreement between correction methods.\n")
+    else if (tier_cor > 0.6) cat("Moderate agreement. Consider which tier best fits your assay.\n")
+    else cat("Weak agreement. Consider retaining lot/plate as a covariate instead.\n")
+  } else { cat("Not enough plates with both tiers for comparison.\n") }
+}
+```
+
+## 4.4 Select Correction Method
+
+Review the diagnostic results from Phases 2-4 to inform this selection. If Phase 2.2 indicated that the shared-shape assumption does not hold, Tier 2 is recommended.
+
+```{r select-correction}
+correction_options <- c("Tier 1 - Standard curve shift factor")
+option_codes <- c(1)
+
+if (!is.null(plate_tier2) && nrow(plate_tier2) > 0) {
+  correction_options <- c(correction_options,
+    "Tier 2 - Bridging sample correction")
+  option_codes <- c(option_codes, 2)
+}
+
+correction_options <- c(correction_options,
+  "No correction (diagnostics only)")
+option_codes <- c(option_codes, 3)
+
+if (exists("tier1_appropriate") && !tier1_appropriate &&
+    !is.null(plate_tier2) && nrow(plate_tier2) > 0) {
+  cat("Recommendation: Phase 2.2 indicated that the shared-shape assumption\n")
+  cat("may not hold for this analyte. Tier 2 is the recommended correction.\n\n")
+} else if (exists("tier1_appropriate") && !tier1_appropriate) {
+  cat("Note: Phase 2.2 indicated that the shared-shape assumption may not\n")
+  cat("hold, but Tier 2 is not available. Tier 1 can be applied with the\n")
+  cat("understanding that the correction carries additional uncertainty.\n\n")
+}
+
+selection <- menu(correction_options, title = "Select correction approach:")
+correction_choice <- option_codes[selection]
+cat("\nSelected:", correction_options[selection], "\n")
+```
+
+
+
+# Phase 5: Apply Corrections and Validate
+
+## 5.1 Build Correction Factor Table
+
+```{r build-correction-table}
+if (is.null(shift_factors)) {
+  cat("No shift factors available.\n"); correction_table <- NULL
+} else {
+  correction_table <- shift_factors %>%
+    dplyr::select(Plate_ID, Assay_Lot, correction_factor, basis)
+
+  if (!is.null(plate_tier2) && nrow(plate_tier2) > 0) {
+    tier2_for_join <- plate_tier2 %>%
+      dplyr::select(Plate_ID, ref_ratio, ratio_basis)
+    correction_table <- correction_table %>%
+      left_join(tier2_for_join, by = "Plate_ID")
+  } else {
+    correction_table$ref_ratio <- NA_real_
+    correction_table$ratio_basis <- NA_character_
+  }
+
+  if (correction_choice == 2) {
+    correction_table <- correction_table %>%
+      mutate(
+        correction_factor = ifelse(!is.na(ref_ratio), ref_ratio, correction_factor),
+        basis = case_when(
+          !is.na(ratio_basis) & ratio_basis == "Lot median (no reference)" ~ ratio_basis,
+          !is.na(ref_ratio) ~ "Per-plate (Tier 2)",
+          TRUE ~ basis
+        )
+      )
+  } else if (correction_choice == 3) {
+    correction_table <- correction_table %>%
+      mutate(correction_factor = 1.0, basis = "None")
+  }
+
+  correction_table <- correction_table %>%
+    mutate(note = case_when(
+      grepl("flagged", basis) ~ "Flagged*",
+      grepl("Lot median", basis) ~ "Lot median*",
+      TRUE ~ ""
+    ))
+
+  print(fmt_table(correction_table %>%
+          dplyr::select(Plate_ID, Assay_Lot, correction_factor, note),
+        caption = "Final Correction Factors by Plate", digits = 4,
+        col.names = c("Plate ID", "Lot", "Correction Factor", "Note")))
+
+  if (any(correction_table$note != "")) {
+    cat("\n* See earlier phases for details on flagged or lot-median plates.\n")
+  }
+}
+```
+
+## 5.2 Validate: Post-Correction Reference Sample Convergence
+
+```{r validate-correction, fig.height=8}
+if (correction_choice != 3 && !is.null(ref_combined) && nrow(ref_combined) > 0 &&
+    !is.null(correction_table)) {
+
+  ref_corrected <- ref_combined %>%
+    left_join(correction_table %>%
+                dplyr::select(Plate_ID, correction_factor), by = "Plate_ID") %>%
+    mutate(Conc_Corrected = Conc * correction_factor)
+
+  ref_long <- ref_corrected %>%
+    dplyr::select(Plate_ID, Assay_Lot, Assay_Date, ID, Conc, Conc_Corrected) %>%
+    pivot_longer(cols = c(Conc, Conc_Corrected), names_to = "Status", values_to = "Concentration") %>%
+    mutate(Status = ifelse(Status == "Conc", "Before Correction", "After Correction"),
+           Status = factor(Status, levels = c("Before Correction", "After Correction")))
+
+  p_validate <- ggplot(ref_long,
+                       aes(x = Assay_Date, y = Concentration, color = Assay_Lot, shape = ID)) +
+    geom_point(size = 2.5) + scale_shape_discrete(name = "Reference Sample") +
+    facet_wrap(~ Status, ncol = 1, scales = "free_y") +
+    labs(title = paste(selected_analyte, "- Reference Samples Before and After Correction"),
+         x = "Assay Date", y = paste0("Concentration (", plates$Conc_Units[1], ")"),
+         color = "Assay Lot") +
+    scale_x_date(date_labels = "%b %Y")
+  print(p_validate)
+
+  convergence_stats <- ref_corrected %>%
+    group_by(Assay_Lot, ID) %>%
+    summarise(n = n(),
+      before_mean = round(mean(Conc, na.rm = TRUE), 4),
+      before_CV = ifelse(n() > 1, round(sd(Conc, na.rm = TRUE) / mean(Conc, na.rm = TRUE) * 100, 1), NA),
+      after_mean = round(mean(Conc_Corrected, na.rm = TRUE), 4),
+      after_CV = ifelse(n() > 1, round(sd(Conc_Corrected, na.rm = TRUE) / mean(Conc_Corrected, na.rm = TRUE) * 100, 1), NA),
+      .groups = "drop")
+
+  print(fmt_table(convergence_stats,
+        caption = "Reference Sample Convergence: Before vs. After Correction",
+        col.names = c("Lot", "Ref ID", "n", "Before Mean", "Before CV%", "After Mean", "After CV%")))
+
+  ref_ids <- unique(ref_corrected$ID)
+  if (length(ref_ids) > 1) cat("\nMultiple reference samples. Evaluating per sample:\n\n")
+
+  for (rid in ref_ids) {
+    ref_sub <- ref_corrected %>% dplyr::filter(ID == rid)
+    if (nrow(ref_sub) < 2) { cat("  ", rid, "- only 1 plate; CV not calculable.\n"); next }
+    n_lots_this_ref <- length(unique(ref_sub$Assay_Lot))
+    before_cv <- round(sd(ref_sub$Conc, na.rm = TRUE) / mean(ref_sub$Conc, na.rm = TRUE) * 100, 1)
+    after_cv <- round(sd(ref_sub$Conc_Corrected, na.rm = TRUE) / mean(ref_sub$Conc_Corrected, na.rm = TRUE) * 100, 1)
+
+    if (exists("preferred_ref") && rid == preferred_ref && correction_choice == 2) {
+      cat("  ", rid, "(primary - used for Tier 2 correction):\n")
+      cat("    Before CV:", before_cv, "%, After CV:", after_cv, "%\n")
+      cat("    After CV near 0% is mathematically expected and does not\n")
+      cat("    validate the correction.\n\n")
+    } else if (n_lots_this_ref < 2) {
+      cat("  ", rid, "- one lot only. CV: Before:", before_cv,
+          "%, After:", after_cv, "%\n\n")
+    } else {
+      cat("  ", rid, "(independent validation):\n")
+      cat("    Before CV:", before_cv, "%, After CV:", after_cv, "%\n")
+      if (after_cv < before_cv) {
+        cat("    Correction improved consistency for this independent reference.\n\n")
+      } else {
+        cat("    Correction did not improve this independent reference.\n")
+        cat("    Possible explanations:\n")
+        cat("    1. Technical issue with this reference sample (degradation,\n")
+        cat("       aliquot variability, or freeze-thaw effects).\n")
+        cat("    2. The lot effect is concentration-dependent -- the correction\n")
+        cat("       derived at the primary reference's concentration does not\n")
+        cat("       apply equally at this reference's concentration range\n")
+        cat("       (Henson et al. 2022).\n")
+        cat("    Review the reference sample boxplots in Phase 3.4 to assess\n")
+        cat("    whether this reference showed consistent behavior within lots.\n\n")
+      }
+    }
+  }
+
+  # Residual plate variation guidance
+  cat("\nResidual plate variation:\n")
+  cat("  The per-plate correction addresses systematic variation in assay\n")
+  cat("  sensitivity. Residual variation may remain from sources not\n")
+  cat("  captured by the correction.\n\n")
+  cat("  For analyses using mixed-effects models: consider including plate\n")
+  cat("  as a random effect.\n")
+  cat("  For analyses using corrected values directly: the corrected values\n")
+  cat("  are the best available estimate. Review trajectory plots in Phase 6.\n")
+
+} else if (correction_choice == 3) {
+  cat("No correction applied. Diagnostics only.\n")
+} else {
+  cat("No reference data available for validation.\n")
+}
+```
+
+## 5.3 Export Correction Table
+
+```{r export-correction-table}
+if (!is.null(correction_table)) {
+  export_table <- correction_table %>%
+    dplyr::select(Plate_ID, Assay_Lot, correction_factor, note)
+
+  export_filename <- paste0(gsub("[^A-Za-z0-9]", "_", selected_analyte),
+                            "_Correction_Factors_", Sys.Date(), ".csv")
+  write.csv(export_table, export_filename, row.names = FALSE)
+  cat("Exported to:", export_filename, "\n")
+
+}
+```
+
+# Phase 6: Apply & Visualize Correction
+
+This phase applies correction factors to sample data and visualizes individual hormone plots before and after correction.
+
+## 6.1 Load Sample Data
+
+```{r load-sample-data}
+cat("Select your sample data file.\n")
+sample_path <- file.choose()
+cat("Loading:", sample_path, "\n")
+
+if (grepl("\\.csv$", sample_path, ignore.case = TRUE)) {
+  sample_data <- read.csv(sample_path, stringsAsFactors = FALSE)
+} else {
+  sample_data <- read_excel(sample_path)
+}
+cat("Loaded", nrow(sample_data), "samples with", ncol(sample_data), "columns.\n")
+```
+
+## 6.2 Map Columns
+
+```{r map-columns}
+col_names <- names(sample_data)
+cat("Available columns:\n")
+for (i in seq_along(col_names)) cat("  ", i, ":", col_names[i], "\n")
+
+cat("\n")
+animal_col <- col_names[menu(col_names, title = "Select the Animal ID column:")]
+date_col <- col_names[menu(col_names, title = "Select the Collection Date column:")]
+conc_col <- col_names[menu(col_names, title = "Select the Concentration column:")]
+plate_col <- col_names[menu(col_names, title = "Select the Plate ID column:")]
+
+cat("\nColumn mapping:\n")
+cat("  Animal ID:", animal_col, "\n")
+cat("  Collection Date:", date_col, "\n")
+cat("  Concentration:", conc_col, "\n")
+cat("  Plate ID:", plate_col, "\n")
+
+sample_df <- sample_data %>%
+  rename(Animal_ID = !!animal_col, Collection_Date = !!date_col,
+         Concentration = !!conc_col, Plate_ID = !!plate_col) %>%
+  mutate(Collection_Date = as.Date(Collection_Date),
+         Concentration = as.numeric(Concentration))
+```
+
+## 6.3 Apply Correction
+
+```{r apply-correction}
+sample_corrected <- sample_df %>%
+  left_join(correction_table %>%
+              dplyr::select(Plate_ID, Assay_Lot, correction_factor, note),
+            by = "Plate_ID") %>%
+  mutate(
+    has_conc = !is.na(Concentration),
+    matched = !is.na(Assay_Lot),
+    correction_factor = ifelse(is.na(correction_factor), 1.0, correction_factor),
+    Conc_Corrected = Concentration * correction_factor
+  )
+
+n_no_conc <- sum(!sample_corrected$has_conc)
+n_matched <- sum(sample_corrected$has_conc & sample_corrected$matched)
+n_unmatched <- sum(sample_corrected$has_conc & !sample_corrected$matched)
+
+cat("Sample summary:\n")
+cat("  Total samples:", nrow(sample_corrected), "\n")
+cat("  No concentration value:", n_no_conc, "(not applicable for this analyte)\n")
+cat("  Matched to correction table:", n_matched, "\n")
+cat("  Has concentration but no matching Plate ID:", n_unmatched, "\n")
+
+if (n_unmatched > 0) {
+  unmatched_plates <- unique(
+    sample_corrected$Plate_ID[sample_corrected$has_conc & !sample_corrected$matched])
+  cat("  Unmatched Plate IDs:", paste(unmatched_plates, collapse = ", "), "\n")
+  cat("  These samples retain their original concentration.\n")
+  cat("  Verify whether these are replacement values or entry errors.\n")
+}
+```
+
+## 6.4 Before and After Correction Plots
+
+```{r trajectory-plots, fig.height=5, fig.width=8, results='asis'}
+animals <- sort(unique(sample_corrected$Animal_ID[sample_corrected$has_conc]))
+cat("Generating trajectory plots for", length(animals), "individuals.\n\n")
+
+traj_long <- sample_corrected %>%
+  dplyr::filter(has_conc) %>%
+  dplyr::select(Animal_ID, Collection_Date, Plate_ID, Assay_Lot,
+                Concentration, Conc_Corrected) %>%
+  pivot_longer(cols = c(Concentration, Conc_Corrected),
+               names_to = "Status", values_to = "Value") %>%
+  mutate(Status = ifelse(Status == "Concentration", "Before Correction", "After Correction"),
+         Status = factor(Status, levels = c("Before Correction", "After Correction")))
+
+for (animal in animals) {
+  animal_data <- traj_long %>%
+    dplyr::filter(Animal_ID == animal, !is.na(Value))
+  if (nrow(animal_data) < 2) next
+
+  p <- ggplot(animal_data,
+              aes(x = Collection_Date, y = Value, color = Status, group = Status)) +
+    geom_line(aes(linetype = Status), linewidth = 0.8, alpha = 0.7) +
+    geom_point(aes(shape = Status), size = 2) +
+    scale_color_manual(values = c("Before Correction" = "#E69F00",
+                                   "After Correction" = "#0072B2"), name = "") +
+    scale_linetype_manual(values = c("Before Correction" = "solid",
+                                      "After Correction" = "dashed"), name = "") +
+    scale_shape_manual(values = c("Before Correction" = 16,
+                                   "After Correction" = 17), name = "") +
+    labs(title = paste(selected_analyte, "-", animal),
+         x = "Collection Date",
+         y = paste0("Concentration (", plates$Conc_Units[1], ")")) +
+    scale_x_date(date_labels = "%b %Y")
+
+  print(p)
+  cat("\n\n")
+}
+```
+
+## 6.5 Export Plots to PDF
+
+```{r export-trajectories}
+plots_per_page <- menu(c("1", "2", "4", "6"),
+                        title = "How many plots per page?")
+ppp <- c(1, 2, 4, 6)[plots_per_page]
+
+if (ppp == 1) { ncol_pg <- 1; nrow_pg <- 1 }
+if (ppp == 2) { ncol_pg <- 1; nrow_pg <- 2 }
+if (ppp == 4) { ncol_pg <- 2; nrow_pg <- 2 }
+if (ppp == 6) { ncol_pg <- 2; nrow_pg <- 3 }
+
+plot_list <- list()
+for (animal in animals) {
+  animal_data <- traj_long %>%
+    dplyr::filter(Animal_ID == animal, !is.na(Value))
+  if (nrow(animal_data) < 2) next
+
+  p <- ggplot(animal_data,
+              aes(x = Collection_Date, y = Value, color = Status, group = Status)) +
+    geom_line(aes(linetype = Status), linewidth = 0.8, alpha = 0.7) +
+    geom_point(aes(shape = Status), size = 2) +
+    scale_color_manual(values = c("Before Correction" = "#E69F00",
+                                   "After Correction" = "#0072B2"), name = "") +
+    scale_linetype_manual(values = c("Before Correction" = "solid",
+                                      "After Correction" = "dashed"), name = "") +
+    scale_shape_manual(values = c("Before Correction" = 16,
+                                   "After Correction" = 17), name = "") +
+    labs(title = animal,
+         x = "Collection Date",
+         y = paste0(selected_analyte, " (", plates$Conc_Units[1], ")")) +
+    scale_x_date(date_labels = "%b %Y") +
+    theme(plot.title = element_text(size = 10))
+
+  plot_list[[length(plot_list) + 1]] <- p
+}
+
+pdf_filename <- paste0(gsub("[^A-Za-z0-9]", "_", selected_analyte),
+                        "_Trajectories_", Sys.Date(), ".pdf")
+
+pdf(pdf_filename, width = 10, height = ifelse(ppp <= 2, 5 * ppp, 10))
+
+for (i in seq(1, length(plot_list), by = ppp)) {
+  page_plots <- plot_list[i:min(i + ppp - 1, length(plot_list))]
+  grid <- wrap_plots(page_plots, ncol = ncol_pg, nrow = nrow_pg)
+  print(grid)
+}
+
+dev.off()
+cat("Saved", length(plot_list), "plots across",
+    ceiling(length(plot_list) / ppp), "pages to:", pdf_filename, "\n")
+```
+
+## 6.6 Summary Assessment
+
+```{r trajectory-summary}
+cat("Trajectory Assessment Summary:\n\n")
+
+animal_summary <- sample_corrected %>%
+  dplyr::filter(has_conc & matched) %>%
+  group_by(Animal_ID) %>%
+  summarise(
+    n_samples = n(),
+    n_lots = length(unique(Assay_Lot[!is.na(Assay_Lot)])),
+    n_plates = length(unique(Plate_ID)),
+    .groups = "drop"
+  )
+
+print(fmt_table(animal_summary,
+      caption = "Per-Animal Sample Distribution",
+      col.names = c("Animal ID", "Samples", "Lots", "Plates")))
+
+cat("\nAnimals with samples spanning multiple lots or many plates are\n")
+cat("most affected by the correction. Review their trajectory plots\n")
+cat("above to assess whether corrections align with lot boundaries.\n")
+```
+
+
+# Methods Summary for Manuscript Use
+
+The following text can be adapted for the methods section of manuscripts. See the README for the full version.
+
+Plate-to-plate and lot-to-lot variation in immunoassay results was assessed and corrected using a simultaneous curve fitting approach adapted from Feng et al. (2019). Standard curves were fitted simultaneously using the drc package in R (Ritz et al. 2015), with shape parameters shared across all plates and only the curve midpoint (ED50) allowed to vary per plate. The shift factor for each plate was calculated as the ratio of the reference lot's median midpoint to the plate's individual midpoint and applied as a multiplicative correction to reported concentrations. Plates with standard curves that did not conform to the shared shape were identified using the IQR method (Tukey 1977) and excluded from the reference lot median calculation.
+
+Where biological reference samples were available, bridging sample correction ratios were calculated as an independent method (Henson et al. 2022). For analytes where the simultaneous fit did not improve reference sample consistency, indicating curve shape differences across lots, the bridging sample correction was used as the primary method (Wilson et al. 2021).
+
+
+# References
+
+- Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. PLoS ONE, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
+
+- Henson RL, Volluz K, Saef BA, et al. (2022). A methodology for normalizing fluid biomarker concentrations across reagent lots. Alzheimer's and Dementia, 18(S6), e066912. https://doi.org/10.1002/alz.066912
+
+- Ritz C, Baty F, Streibig JC, Gerhard D. (2015). Dose-response analysis using R. PLoS ONE, 10(12), e0146021. https://doi.org/10.1371/journal.pone.0146021
+
+- Tukey JW. (1977). Exploratory Data Analysis. Reading, MA: Addison-Wesley Publishing Company. ISBN 978-0-201-07616-5.
+
+- Whitcomb BW, Perkins NJ, Albert PS, Schisterman EF. (2010). Treatment of batch in the detection, calibration, and quantification of immunoassays in large-scale epidemiologic studies. Epidemiology, 21(Suppl 4), S44-S50. https://doi.org/10.1097/EDE.0b013e3181f37e32
+
+- Wilson AE, Sergiel A, Selva N, et al. (2021). Correcting for enzyme immunoassay changes in long term monitoring studies. MethodsX, 8, 101212. https://doi.org/10.1016/j.mex.2021.101212
+
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```
