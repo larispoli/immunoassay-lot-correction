@@ -118,13 +118,13 @@ When Tier 2 is unavailable (no reference samples or reference samples do not spa
 
 The 5PL includes an asymmetry parameter (f) that describes how the upper and lower portions of the curve differ in steepness. In the simultaneous fit, this parameter is shared across all plates.
 
-If the asymmetry genuinely differs across lots (e.g., because antibody binding kinetics changed), forcing a single shared value creates a compromise that does not accurately describe any lot. The midpoint can only shift the curve horizontally; it cannot compensate for a shape change. In this situation:
+If the asymmetry genuinely differs across lots (e.g., because antibody binding kinetics changed between manufacturing batches), forcing a single shared value creates a compromise that does not accurately describe any lot. The midpoint can only shift the curve horizontally; it cannot compensate for a shape change. In this situation:
 
 - The reference sample consistency check (Phase 2.2) will show that the simultaneous model increased variability compared to the original reported values.
 - The correction factors from Tier 1 will be less reliable.
 - Tier 2 (bridging sample correction) should be used as the primary correction method, as it does not depend on curve shape assumptions.
 
-This scenario is consistent with the findings of Wilson et al. (2021), who demonstrated that when the antibody in a cortisol EIA kit was replaced, the standard curve shape changed along with cross-reactivity, and curve-based correction was not sufficient.
+**Important distinction:** This applies when the antibody specificity remains the same but sensitivity or binding kinetics vary between batches. If the antibody was replaced with one that has a fundamentally different cross-reactivity profile (as in Wilson et al. 2021, where 11-deoxycortisol cross-reactivity changed from 15% to 58%), the assay is effectively measuring a different analyte. In that case, data from the two antibodies cannot be combined through correction — they represent different biological measurements and should be treated as separate datasets.
 
 ### The Four-parameter Logistic Curve Fitted (4PL) Datasets
 
