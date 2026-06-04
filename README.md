@@ -21,11 +21,11 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
                             
 ## **Overview**
                             
-Immunoassays used in longitudinal studies are subject to variation from multiple sources including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses. While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, other analyese such as cycle detection, ROC analysis, and time series modeling cannot and a correction for the lot-to-lot variation must occur before data used.
+Immunoassays used in longitudinal studies are subject to variation from multiple sources, including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses. While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, for other analyses, such as cycle detection, ROC analysis, and time series modeling, the covariate option is not available, and a correction for the lot-to-lot variation must occur before the data is used.
                             
 This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
 
-*NOTE: I apologize for the long length of this document. Please read the entire thing at least once as should provide clarity about what happens with data when lot correction is utilited.*
+*NOTE: I apologize for the long length of this document. Please read the entire thing at least once, as it should provide clarity about what happens with data when lot correction is utilized.*
                             
 ## **When to Use This Pipeline**
                             
@@ -42,7 +42,7 @@ The ELISAtools package (Feng et al. 2019) is more appropriate when:
                               
 - You have raw plate reader output files (96-well format with individual well ODs for all standards, controls, and unknowns).
 - You want to recalculate sample concentrations from the adjusted standard curve rather than applying a multiplicative correction to already-reported values.
-- Your data is prospective and you can integrate ELISAtools into your routine data processing workflow.
+- Your data is prospective, and you can integrate ELISAtools into your routine data processing workflow.
   
 This pipeline adapts the core methodology of Feng et al. (2019) -- simultaneous curve fitting with shared shape parameters -- but applies the resulting shift factor to reported concentrations rather than recalculating from raw signals. This makes it suitable for retrospective datasets where raw signals are unavailable.
                             
@@ -97,7 +97,7 @@ An independent, measurement-based correction. A biological reference sample (e.g
 
 This follows the bridging sample normalization approach described by Henson et al. (2022). Tier 2 does not depend on curve shape assumptions. It directly measures how much a plate's reported concentration for a known sample differs from the reference lot's value.
 
-When both Tier 1 and Tier 2 are available, agreement between them provides the strongest evidence that the correction is appropriate. Divergence suggests the lot effect involves more than a simple curve shift and warrants further investigation.
+When both Tier 1 and Tier 2 are available, an agreement between them provides the strongest evidence that the correction is appropriate. Divergence suggests the lot effect involves more than a simple curve shift and warrants further investigation.
 
   **Tier 2 Implications**
 
@@ -105,11 +105,11 @@ When both Tier 1 and Tier 2 are available, agreement between them provides the s
 
 ### **Choosing Between Tiers**
 
-When both tiers agree: either is defensible; Tier 1 provides full coverage while Tier 2 validates it.
+When both tiers agree, either is defensible; Tier 1 provides full coverage while Tier 2 validates it.
 
 When Tier 1 shows increased variability in the reference sample consistency check (Phase 2.2): Tier 2 is the recommended correction method, as the shared-shape assumption does not adequately describe the variation.
 
-When Tier 2 is unavailable (no reference samples, or reference samples do not span all lots): Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it.
+When Tier 2 is unavailable (no reference samples or reference samples do not span all lots), Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it.
 
 
 ## **Dataset Considerations**
@@ -132,7 +132,7 @@ For datasets where all plates use 4PL (four-parameter logistic), the shape is sy
 
 ### Mixed 4PL and 5PL Datasets
 
-When some plates were originally fitted with 4PL and others with 5PL, the pipeline tests both shared models and selects the one with lower overall RMSE. In most cases, the 5PL will be selected because it can accommodate slight asymmetry in 4PL plates (the asymmetry parameter will estimate near 1.0 for symmetric curves) while also fitting the genuinely asymmetric 5PL plates.
+When some plates were originally fitted with 4PL and others with 5PL, the pipeline tests both shared models and selects the one with lower overall RMSE. In most cases, the 5PL will be selected because it can accommodate slight asymmetry in 4PL plates (the asymmetry parameter will be estimated near 1.0 for symmetric curves) while also fitting the genuinely asymmetric 5PL plates.
 
 The pipeline reports the median difference between original reported concentrations and simultaneous model predictions for each model type separately. If the differences are small (under 10%), the original curve model choice did not substantially affect the reported values and no action is needed. If the differences are large, and raw plate reader data is available, rerunning the affected plates with a consistent curve model would produce more accurate starting concentrations before applying the shift factor correction.
 
@@ -157,7 +157,7 @@ A biological reference sample is a pooled biological sample (e.g., pooled serum 
 
 A reference sample is NOT:
 
-- A manufacturer-provided QC sample (typically in idealized matrix, used for pass/fail decisions)
+- A manufacturer-provided QC sample (typically in an idealized matrix, used for pass/fail decisions)
 - A calibrator or standard (captured separately in the standard curve columns)
 
 ### Bridging References
