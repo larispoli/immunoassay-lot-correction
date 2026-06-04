@@ -21,7 +21,7 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
                             
 ## **Overview**
                             
-Immunoassays used in longitudinal studies and biobanks are subject to variation from multiple sources: manufacturing differences between reagent lots, plate-to-plate variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses such as cycle detection, ROC analysis, and time series modeling.
+Immunoassays used in longitudinal studies are subject to variation from multiple sources including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses. While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, other analyese such as cycle detection, ROC analysis, and time series modeling cannot and correction for the lot-to-lot variation needs to occur before use the data.
                             
 This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
                             
@@ -32,7 +32,7 @@ This pipeline is appropriate when:
 - You have reported concentrations from immunoassays run across multiple plates and/or reagent lots.
 - Raw sample-level signal data (individual well ODs for each unknown sample) is not available or not practical to retrieve retrospectively.
 - Standard curve data (concentration and signal values for each standard point) can be recovered from plate reports, instrument software, or laboratory records.
-- You need corrected values on a consistent scale for analyses such as ROC curves, threshold-based detection, cross-analyte comparisons, or longitudinal trajectory analysis.
+- You need corrected values on a consistent scale for analyses such as ROC curves, threshold-based detection, cross-analyte comparisons, etc.
                             
 ## **When to Use ELISAtools Instead**
                             
@@ -66,7 +66,7 @@ Every plate receives its own shift factor, including plates in the reference lot
 
 ### **Outlier Detection**
 
-Plates whose standard curves do not conform to the shared shape are identified using the interquartile range (IQR) method applied to per-plate root mean square error (RMSE) values. Plates with RMSE exceeding Q3 + 1.5 x IQR are classified as outliers (Tukey 1977). This is the standard boxplot outlier rule.
+Plates whose standard curves do not conform to the shared shape are identified using the interquartile range (IQR) method applied to per-plate root mean square error (RMSE) values. Plates with RMSE exceeding Q3 + 1.5 x IQR are classified as outliers (Tukey 1977).
 
 Flagged plates are excluded from the calculation of the reference lot's median midpoint so they do not influence the baseline. They still receive their own per-plate correction factor, but their corrected values carry additional uncertainty. Users should identify which samples were run on flagged plates.
                             
@@ -78,7 +78,7 @@ For datasets with only one reagent lot, the pipeline functions as a plate-to-pla
 
 ### **Tier 1 -- Standard Curve Shift Factor**
 
-The primary correction method. Uses the simultaneous curve fit described above. Available for every plate in the dataset because every plate has standard curve data (a requirement for inclusion in the metadata table).
+The primary correction method. Uses the simultaneous curve fit described above. Available for every plate in the dataset because every plate has standard curve data (a requirement for inclusion in the Assay Data table).
 
 Tier 1 is based on the methodology described in Feng et al. (2019), adapted for application to reported concentrations rather than recalculation from raw signals.
   
@@ -138,11 +138,11 @@ The pipeline reports the median difference between original reported concentrati
 
 The reference lot defines the baseline scale for all corrected values. Both Tier 1 and Tier 2 corrections are anchored to this lot.
 
-### Other Items to Consider
+### Items to Consider
 
 - **Maintain consistency:** If a lot was the reference in previous analyses or publications, keep it. This ensures previously corrected values and any thresholds derived from them remain comparable.
 - **Stability:** Prefer the lot with the most plates (more stable median midpoint) and the tightest clustering of midpoints (most internally consistent baseline).
-- **Future direction:** If a particular lot represents the assay conditions you intend to use going forward, selecting it means future data will require minimal correction.
+- **Future direction:** If a particular lot represents the assay conditions you intend to use going forward, selecting it means future data should require minimal correction.
 - **Fundamental assay changes:** If a complete antibody replacement or assay format change occurred, the new conditions may warrant a new reference lot. Values corrected to the new reference are not directly comparable to values corrected to the previous one. This effectively creates two separate analytical eras that should be documented (Wilson et al. 2021).
 - **Scale, not relationships:** The choice of reference lot does not affect the relative correction between any two plates. It only sets the absolute scale that corrected values are expressed on.
 
@@ -162,13 +162,9 @@ A reference sample is NOT:
 
 A reference sample that is measured across multiple lots provides a direct lot-to-lot comparison and enables Tier 2 correction. This is the most valuable type of reference data for longitudinal datasets.
 
-### Lot-Specific References
-
-When different reference pools are used in different lots, they have different true concentrations and cannot be directly compared. Within-lot consistency can still be assessed, but Tier 2 correction between those lots requires dual-reference plates (plates where both reference pools were measured simultaneously) to establish a cross-reference ratio.
-
 ### Cross-Reference Bridging
 
-When transitioning between reference pools, running both the old and new reference on at least one plate establishes the ratio between them. The pipeline detects these dual-reference plates automatically and uses the ratio to extend Tier 2 coverage across lots that used different reference pools.
+When transitioning between reference samples, running both the old and new reference on at least one plate establishes the ratio between them. The pipeline detects these dual-reference plates automatically and uses the ratio to extend Tier 2 coverage across lots that used different reference pools.
 
 ## Requirements
 
@@ -245,7 +241,7 @@ Additional columns (e.g., species, sex, reproductive status) are preserved but n
 
 ### Phase 6.4 -- Trajectory Plots
 
-**What to look for:** Where the orange (before) and blue (after) lines diverge, the correction changed the value. This should align with plate or lot transitions, not with biological events. If the correction smooths out artificial steps at lot boundaries while preserving biological patterns, it is working as intended.
+**What to look for:** Where the orange (before) and blue (after) lines diverge, the correction changed the value. This should align with plate or lot transitions, not with biological events.
 
 ## Methods Summary for Manuscript Use
 
@@ -263,11 +259,11 @@ Where biological reference samples (pooled serum run alongside unknowns) were av
 
 For analytes where the simultaneous curve fit did not improve reference sample consistency -- indicating that lot-to-lot variation involved changes in curve shape rather than position (e.g., due to antibody batch differences) -- the bridging sample correction (Tier 2) was used as the primary correction method, as it does not depend on curve shape assumptions (Wilson et al. 2021).
 
-Correction effectiveness was evaluated by comparing reference sample concentration CVs before and after correction, and by visual inspection of individual longitudinal hormone trajectories with and without the correction applied.
+Correction effectiveness was evaluated by comparing reference sample concentration CVs before and after correction, and by visual inspection of individual longitudinal hormone plots with and without the correction applied.
 
 For analyses using mixed-effects models, including plate as a random effect should be considered to absorb residual variation not captured by the standard curve correction (Whitcomb et al. 2010). For analyses using corrected values directly (e.g., threshold-based detection, time series), the corrected values represent the best available estimate of the true concentration on the reference lot's scale.
                             
-All analyses were performed in R using the drc package (Ritz et al. 2015) for simultaneous curve fitting and the tidyverse suite for data manipulation and visualization.
+All analyses were performed in R using the tidyverse suite for data manipulation and visualization.
                             
 ---
                               
