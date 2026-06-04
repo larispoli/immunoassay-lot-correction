@@ -1,6 +1,6 @@
 # Immunoassay Lot-to-Lot Correction Pipeline
 
-A diagnostic and correction tool for assessing and adjusting plate-to-plate and lot-to-lot variation in immunoassay results. Designed for retrospective application to reported concentrations in biobank and longitudinal datasets where raw sample-level signal data may not be available.
+A diagnostic and correction tool for assessing and adjusting plate-to-plate and lot-to-lot variation in immunoassay results. Designed for retrospective application to reported concentrations in longitudinal datasets where raw sample-level signal data may not be available.
 
 ## Contents
 
