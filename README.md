@@ -2,6 +2,9 @@
 
 A diagnostic and correction tool for assessing and adjusting plate-to-plate and lot-to-lot variation in immunoassay results. Designed for retrospective application to reported concentrations in longitudinal datasets where raw sample-level signal data may not be available.
 
+
+*NOTE from Louisa: I apologize for the long length of this document. Please read the entire thing at least once, as it should provide clarity about what happens with data when lot correction is utilized.*
+
 ## Contents
 
 - [Overview](#overview)
@@ -24,8 +27,6 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
 Immunoassays used in longitudinal studies are subject to variation from multiple sources, including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses. While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, for other analyses, such as cycle detection, ROC analysis, and time series modeling, the covariate option is not available, and a correction for the lot-to-lot variation must occur before the data is used.
                             
 This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
-
-*NOTE: I apologize for the long length of this document. Please read the entire thing at least once, as it should provide clarity about what happens with data when lot correction is utilized.*
                             
 ## **When to Use This Pipeline**
                             
