@@ -25,7 +25,7 @@ Immunoassays used in longitudinal studies are subject to variation from multiple
                             
 This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
 
-*NOTE: Pleae read this at least once. It is a long document but I want to provide clarity about what happens with data when lot correction is utilited.*
+*NOTE: I apologize for the long length of this document. Please read the entire thing at least once as should provide clarity about what happens with data when lot correction is utilited.*
                             
 ## **When to Use This Pipeline**
                             
