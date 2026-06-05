@@ -4,6 +4,7 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
 
 
 *NOTE from Louisa: I apologize for the long length of this document. Please read the entire thing at least once, as it should provide clarity about what happens with data when lot correction is utilized.*
+**This is under beta testing at moment as need others to check my code and implementation of logic for handling assay variation**
 
 ## Contents
 
