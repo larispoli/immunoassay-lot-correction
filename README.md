@@ -180,6 +180,8 @@ Packages are installed automatically on first run if not already present.
 | `Lot_Correction_Pipeline.Rmd` | The R Notebook pipeline. Open in RStudio and run interactively. |
 | `Assay_Plate_Data_Template.xlsx` | Template for plate-level metadata input. Contains four sheets: Instructions, AssayPlateData (blank template), Codebook (data dictionary), and Examples. |
 | `README.md` | This file. |
+| `Tier1_example.nb` | An example of using Tier 1 correction (an R notebook HTML file). Opens in a web browser. | 
+| `Tier2_example.nb` | An example of using Tier 2 correction (an R notebook HTML file). Opens in a web browser. |
 
 ## Quick Start
 
