@@ -278,6 +278,6 @@ All analyses were performed in R using the tidyverse suite for data manipulation
 
 - Tukey JW. (1977). *Exploratory Data Analysis*. Reading, MA: Addison-Wesley Publishing Company. ISBN 978-0-201-07616-5.
 
-- Whitcomb BW, Perkins NJ, Albert PS, Schisterman EF. (2010). Treatment of batch in the detection, calibration, and quantification of immunoassays in large-scale epidemiologic studies. *Epidemiology*, 21(Suppl 4), S44-S50. https://doi.org/10.1097/EDE.0b013e3181f37e32
+- Whitcomb BW, Perkins NJ, Albert PS, Schisterman EF. (2010). Treatment of batch in the detection, calibration, and quantification of immunoassays in large-scale epidemiologic studies. *Epidemiology*, 21(Suppl 4), S44-S50. DOI: 10.1097/EDE.0b013e3181dceac2
 
 - Wilson AE, Sergiel A, Selva N, et al. (2021). Correcting for enzyme immunoassay changes in long term monitoring studies. *MethodsX*, 8, 101212. https://doi.org/10.1016/j.mex.2021.101212
