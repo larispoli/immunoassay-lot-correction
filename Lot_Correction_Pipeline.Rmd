@@ -223,7 +223,7 @@ cat("Reshaped", nrow(std_long), "standard curve points across",
 
 ## 2.1 Simultaneous Curve Fitting
 
-All standard curves are fitted simultaneously using the drc package, following the methodology of Feng et al. (2019). The shape parameters (upper asymptote, lower asymptote, slope) are shared across all plates, while the curve midpoint (ED50) is allowed to vary per plate. This enforces the assumption that variation manifests as a horizontal shift on the concentration axis rather than a change in curve shape.
+All standard curves are fitted simultaneously using the drc package, following the methodology of Feng et al. (2019). The shape parameters (upper asymptote, tote, slope) are shared across all plates, while the curve midpoint (ED50) is allowed to vary per plate. This enforces the assumption that variation manifests as a horizontal shift on the concentration axis rather than a change in curve shape.
 
 If curves were originally fitted with different models (e.g., 4PL and 5PL), the pipeline tests whether a single model fits all plates adequately.
 
@@ -358,7 +358,7 @@ if (!is.null(sim_fit)) {
 
   cat("Shared curve parameters:\n")
   cat("  Upper asymptote (d):", round(d_shared, 3), "\n")
-  cat("  Lower asymptote (c):", round(c_shared, 3), "\n")
+  cat("  Lower asymptote (a):", round(c_shared, 3), "\n")
   cat("  Slope (b):", round(b_shared, 3), "\n")
   if (sim_model == "5PL") {
     f_shared <- shared_params[grep("^f:", param_names)]
