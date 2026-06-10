@@ -187,7 +187,7 @@ Packages are installed automatically on first run if not already present.
 ## Quick Start
 
 1. **Prepare your data.** Fill out the Assay Plate Data Template with one row per assay plate. See the Instructions and Examples sheets in the template for guidance.
-     #### Data Preparation
+     
      Before running the pipeline, ensure the following:
 
       **Consistent curve fitting:** All plates for a given analyte should use the same curve model (4PL or 5PL). If plates were originally fitted with different models, the pipeline can accommodate this but results   are more reliable with consistent fitting. If refitting is possible, 4PL is recommended when standard curves have 5 or fewer points (insufficient degrees of freedom for 5PL individual fits).
