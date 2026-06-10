@@ -52,9 +52,9 @@ This pipeline adapts the core methodology of Feng et al. (2019) -- simultaneous 
                             
 ### **The Simultaneous Curve Fit**
                             
-All standard curves in the dataset are fitted simultaneously using the `drc` package in R. The key constraint: all curves share the same shape parameters (upper asymptote, lower asymptote, slope, and for 5PL, asymmetry). Only the curve midpoint (ED50) is allowed to vary per plate.
-                            
-This enforces the assumption that variation between plates manifests as a horizontal shift on the concentration axis -- the curve slides left or right but retains the same shape. A sample producing a given signal would be assigned a higher or lower concentration depending on which plate it was run on, purely because of where that plate's curve sits on the x-axis.
+All standard curves in the dataset are fitted simultaneously using the drc package in R (Ritz et al. 2015). The package estimates a single set of shared shape parameters (upper asymptote, lower asymptote, slope, and for 5PL, asymmetry) from every standard curve data point across every plate in a single optimization. These are not averages of individual plate fits — they are the best-fit values that minimize the total residual error across the entire dataset. Each plate contributes to the shared shape proportionally to the number of standard points it provides.
+
+The only parameter allowed to vary per plate is the curve midpoint (ED50). This enforces the assumption that variation between plates manifests as a horizontal shift on the concentration axis — the curve slides left or right but retains the same shape. A sample producing a given signal would be assigned a higher or lower concentration depending on which plate it was run on, purely because of where that plate's curve sits on the x-axis.
 
 ### **The Shift Factor**
 
