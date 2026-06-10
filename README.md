@@ -25,7 +25,7 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
                             
 ## **Overview**
                             
-Immunoassays used in longitudinal studies are subject to variation from multiple sources, including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses. While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, for other analyses, such as cycle detection, ROC analysis, and time series modeling, the covariate option is not available, and a correction for the lot-to-lot variation must occur before the data is used.
+Immunoassays used in longitudinal studies are subject to variation from multiple sources, including manufacturing differences between reagent lots, batch variability within lots, and changes in assay components over time. This variation can introduce systematic bias into reported concentrations, affecting downstream analyses (Chung et al. 2023). Standard lot-to-lot comparison protocols may fail to detect this drift when each new lot is compared only to its immediate predecessor, allowing cumulative bias to go undetected (Algeciras-Schimnich et al. 2013). While plate and lot can be included as covariates in mixed modeling analyses to help correct for the variation, for other analyses, such as cycle detection, ROC analysis, and time series modeling, the covariate option is not available, and a correction for the lot-to-lot variation must occur before the data is used.
                             
 This pipeline provides a structured, reproducible workflow to assess the magnitude and nature of this variation, apply defensible corrections where appropriate, and validate the impact of those corrections on actual sample data. It produces an interactive R Notebook with diagnostic tables, figures, and guided decision points.
                             
@@ -72,7 +72,7 @@ Every plate receives its own shift factor, including plates in the reference lot
 
 Plates whose standard curves do not conform to the shared shape are identified using the interquartile range (IQR) method applied to per-plate root mean square error (RMSE) values. Plates with RMSE exceeding Q3 + 1.5 x IQR are classified as outliers (Tukey 1977).
 
-Flagged plates are excluded from the calculation of the reference lot's median midpoint so they do not influence the baseline. They still receive their own per-plate correction factor, but their corrected values carry additional uncertainty. Users should identify which samples were run on flagged plates.
+Flagged plates are excluded from the calculation of the reference lot's median midpoint so they do not influence the baseline. They still receive their own per-plate correction factor, but their corrected values carry additional uncertainty. Users should identify which samples were run on flagged plates. This per-plate assessment addresses a known limitation of standard QC protocols, which may pass individual plates while failing to detect systematic drift across the dataset (Algeciras-Schimnich et al. 2013).
                             
 #### *Single-Lot Datasets:* 
 
@@ -88,7 +88,7 @@ Tier 1 is based on the methodology described in Feng et al. (2019), adapted for 
   
   **When Tier 1 May Not Be Appropriate**
 
-  *The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape. When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position.*
+  *The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape. When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position (Wilson et al. 2021; Chung et al. 2023).*
 
 
 ### **Tier 2 -- Reference Sample Based Correction**
@@ -111,7 +111,7 @@ When both tiers agree, either is defensible; Tier 1 provides full coverage while
 
 When Tier 1 shows increased variability in the reference sample consistency check (Phase 2.2): Tier 2 is the recommended correction method, as the shared-shape assumption does not adequately describe the variation.
 
-When Tier 2 is unavailable (no reference samples or reference samples do not span all lots), Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it.
+When Tier 2 is unavailable (no reference samples or reference samples do not span all lots), Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it. Alternatively, lot and plate can be included as covariates in downstream mixed-effects models rather than pre-correcting the data (Whitcomb et al. 2010).
 
 
 ## **Dataset Considerations**
@@ -140,12 +140,13 @@ The pipeline reports the median difference between original reported concentrati
 
 ## Selecting the Reference Lot
 
-The reference lot defines the baseline scale for all corrected values. Both Tier 1 and Tier 2 corrections are anchored to this lot.
+The reference lot defines the baseline scale for all corrected values. Both Tier 1 and Tier 2 corrections are anchored to this lot. 
 
 ### Items to Consider
 
 - **Maintain consistency:** If a lot was the reference in previous analyses or publications, keep it. This ensures previously corrected values and any thresholds derived from them remain comparable.
 - **Stability:** Prefer the lot with the most plates (more stable median midpoint) and the tightest clustering of midpoints (most internally consistent baseline).
+- **Tier 2 considerations:** If Phase 2.2 recommends Tier 2, prefer the lot with the lowest reference sample CV (visible in the Phase 3.4 boxplots), sufficient plate count, and reference sample coverage across the most lots. The selected lot must have reference sample data for Tier 2 to function.
 - **Future direction:** If a particular lot represents the assay conditions you intend to use going forward, selecting it means future data should require minimal correction.
 - **Fundamental assay changes:** If a complete antibody replacement or assay format change occurred, the new conditions may warrant a new reference lot. Values corrected to the new reference are not directly comparable to values corrected to the previous one. This effectively creates two separate analytical eras that should be documented (Wilson et al. 2021).
 - **Scale, not relationships:** The choice of reference lot does not affect the relative correction between any two plates. It only sets the absolute scale that corrected values are expressed on.
@@ -186,18 +187,28 @@ Packages are installed automatically on first run if not already present.
 ## Quick Start
 
 1. **Prepare your data.** Fill out the Assay Plate Data Template with one row per assay plate. See the Instructions and Examples sheets in the template for guidance.
+     #### Data Preparation
+     Before running the pipeline, ensure the following:
 
-2. **Open the pipeline.** Open `Lot_Correction_Pipeline.Rmd` in RStudio.
+      **Consistent curve fitting:** All plates for a given analyte should use the same curve model (4PL or 5PL). If plates were originally fitted with different models, the pipeline can accommodate this but results   are more reliable with consistent fitting. If refitting is possible, 4PL is recommended when standard curves have 5 or fewer points (insufficient degrees of freedom for 5PL individual fits).
 
-3. **Run chunks one at a time.** Prompts will appear in the Console at decision points.
+      **Exclude S0 from curve fitting:** For competitive assays, the zero standard (B0/S0) should not be included as a data point in the standard curve fit. Signal values should be in percent binding (%B), which already incorporates S0 as the normalization reference. Including S0 in the fit double-counts it and artificially constrains the upper asymptote. If your instrument software included S0 in the original curve fit, refit without it before entering data into the template.
 
-4. **Review outputs.** Diagnostic tables and figures appear inline after each chunk. Review them before responding to prompts.
+      **Plate ID consistency:** Plate IDs must match exactly between the Assay Plate Data template and any sample data files used in Phase 6. The match is case-sensitive -- "PRL-1" and "PRl-1" are treated as different plates.
 
-5. **Save.** After all chunks complete, save the file (Ctrl+S) to capture all outputs into the notebook (.nb.html).
+      **Assay scope:** This pipeline is designed for dose-response immunoassays (competitive or sandwich ELISA/EIA) that use multi-point standard curves fitted with logistic models. Single-point calibration assays, enzymatic activity assays, and other non-curve-based quantitation methods are outside the scope of this tool.
 
-6. **Rename.** Rename the .nb.html file to include the analyte name (e.g., `Lot_Correction_Pipeline_P4.nb.html`) before running a different analyte.
+3. **Open the pipeline.** Open `Lot_Correction_Pipeline.Rmd` in RStudio.
 
-7. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual plots before and after correction to assess biological impact.
+4. **Run chunks one at a time.** Prompts will appear in the Console at decision points.
+
+5. **Review outputs.** Diagnostic tables and figures appear inline after each chunk. Review them before responding to prompts.
+
+6. **Save.** After all chunks complete, save the file (Ctrl+S) to capture all outputs into the notebook (.nb.html).
+
+7. **Rename.** Rename the .nb.html file to include the analyte name (e.g., `Lot_Correction_Pipeline_P4.nb.html`) before running a different analyte.
+
+8. **Optional: Phase 6.** If you have longitudinal sample data, Phase 6 visualizes individual plots before and after correction to assess biological impact.
 
 #### **Optional Input (for Phase 6 -- Apply & Visualize Correction):**
 
@@ -217,9 +228,9 @@ Additional columns (e.g., species, sex, reproductive status) are preserved but n
 
 ### Phase 2.1 -- Simultaneous Curve Fit
 
-**What to look for:** All plates fit the shared-shape model well (no outlier flags) = Tier 1 is appropriate. Flagged plates have standard curves that do not conform to the shared shape.
+**What to look for:** All plates fit the shared-shape model within expected bounds. Flagged plates have standard curves that do not conform to the shared shape.
 
-**If mixed curve models detected (4PL and 5PL):** The pipeline tests both and selects the better fit. Pay attention to the median difference by model type.
+**If mixed curve models detected (4PL and 5PL):** The pipeline tests both and selects the better fit. Pay attention to the median difference by model type in Phase 2.2.
 
 ### Phase 2.2 -- Reference Sample Consistency Check
 
@@ -230,7 +241,11 @@ Additional columns (e.g., species, sex, reproductive status) are preserved but n
 
 ### Phase 3.3 -- Midpoint Plot
 
-**What to look for:** Tight clustering within lots indicates consistent plates. Clear separation between lots indicates a systematic lot effect. Widely scattered midpoints within a lot indicate substantial plate-to-plate variation.
+**Guides Tier 1 reference lot selection.** Tight clustering within lots indicates consistent plates. Clear separation between lots indicates a systematic lot effect. Widely scattered midpoints within a lot indicate substantial plate-to-plate variation.
+
+### Phase 3.4 -- Reference Sample Distribution by Lot
+
+**Guides Tier 2 reference lot selection.** Shows reference sample concentrations by lot with within-lot CV annotations. The lot with the lowest CV and sufficient plate count provides the most stable anchor for Tier 2 correction.
 
 ### Phase 4.3 -- Tier Comparison
 
@@ -238,11 +253,11 @@ Additional columns (e.g., species, sex, reproductive status) are preserved but n
 
 ### Phase 5.2 -- Post-Correction Validation
 
-**What to look for:** Reference sample CVs should decrease after correction. If they increase, the correction may not be appropriate.
+**What to look for:** Reference sample CVs should decrease after correction. If they increase, the correction may not be appropriate. When Tier 2 is used, the primary reference sample's CV will be near zero by definition -- this is mathematically expected, not validation. The independent reference sample (if available) provides the true validation.
 
 ### Phase 6.4 -- Before & After Plots
 
-**What to look for:** Where the orange (before) and blue (after) lines diverge, the correction changed the value. This should align with plate or lot transitions.
+**What to look for:** Where the orange circles (before) and blue triangles (after) diverge, the correction changed the value. Solid lines = before, dashed lines = after.
 
 ## Methods Summary for Manuscript Use
 
@@ -264,12 +279,16 @@ Correction effectiveness was evaluated by comparing reference sample concentrati
 
 For analyses using mixed-effects models, including plate as a random effect should be considered to absorb residual variation not captured by the standard curve correction (Whitcomb et al. 2010). For analyses using corrected values directly (e.g., threshold-based detection, time series), the corrected values represent the best available estimate of the true concentration on the reference lot's scale.
                             
-All analyses were performed in R using the tidyverse suite for data manipulation and visualization.
+All analyses were performed in R using the drc package (Ritz et al. 2015) for simultaneous curve fitting and the tidyverse suite for data manipulation and visualization.
                             
 ---
                               
 ## Referenced Literature
                               
+- Algeciras-Schimnich A, Bruns DE, Boyd JC, Bryant SC, La Fortune KA, Grebe SKG. (2013). Failure of current laboratory protocols to detect lot-to-lot reagent differences: findings and possible solutions. *Clinical Chemistry*, 59(8), 1187-1194. https://doi.org/10.1373/clinchem.2013.205070
+  
+- Chung S, Kang J, Gao Y, et al. (2023). Lot-to-Lot Variance in Immunoassays -- Causes, Consequences, and Solutions. *Diagnostics*, 13(11), 1835. https://doi.org/10.3390/diagnostics13111835
+
 - Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. *PLoS ONE*, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
                             
 - Henson RL, Volluz K, Saef BA, et al. (2022). A methodology for normalizing fluid biomarker concentrations across reagent lots. *Alzheimer's and Dementia*, 18(S6), e066912. https://doi.org/10.1002/alz.066912
