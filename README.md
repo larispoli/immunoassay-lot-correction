@@ -21,7 +21,7 @@ A diagnostic and correction tool for assessing and adjusting plate-to-plate and 
 - [Quick Start](#quick-start)
 - [Interpreting Key Outputs](#interpreting-key-outputs)
 - [Methods Summary for Manuscript Use](#methods-summary-for-manuscript-use)
-- [References](#references)
+- [Referenced Literature](#referenced-literature)
                             
 ## **Overview**
                             
