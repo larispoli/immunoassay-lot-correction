@@ -268,7 +268,7 @@ All analyses were performed in R using the tidyverse suite for data manipulation
                             
 ---
                               
-## References
+## Referenced Literature
                               
 - Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. *PLoS ONE*, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
                             
