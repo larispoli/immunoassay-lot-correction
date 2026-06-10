@@ -155,7 +155,7 @@ The reference lot defines the baseline scale for all corrected values. Both Tier
 
 ### What Qualifies as a Reference Sample
 
-A biological reference sample is a biological sample (e.g., pooled serum or plasma from a relevant species) that is aliquoted, stored, and run on each plate alongside unknown samples. Its purpose is to track assay consistency across plates and lots. Having at least 2 reference samples with different concentrations (i.e., low and high) allows for assessing curve shape shifts more easily. 
+A reference sample is typically a biological sample in the same matrix as the unknowns (e.g., pooled serum or plasma from a relevant species) that is aliquoted, stored, and run on each plate alongside the unknown samples. Its purpose is to track assay consistency across plates and lots. Having at least 2 reference samples with different concentrations (i.e., low and high) allows for easier assessment of shifts in curve shape. 
 
 ### Bridging References
 
