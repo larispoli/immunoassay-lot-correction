@@ -88,7 +88,7 @@ Tier 1 is based on the methodology described in Feng et al. (2019), adapted for 
   
   **When Tier 1 May Not Be Appropriate**
 
-  *The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape. When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position (Wilson et al. 2021; Chung et al. 2023).*
+  *The simultaneous fit shares all curve shape parameters across plates. This works when lot-to-lot variation is a shift in assay sensitivity (the curve moves left or right) without a change in curve shape. When a fundamental assay change has occurred -- such as a new antibody batch with different binding characteristics, a change in cross-reactivity, or a switch in assay format -- the curves may differ in shape, not just position (Wilson et al. 2021).*
 
 
 ### **Tier 2 -- Reference Sample Based Correction**
@@ -286,13 +286,11 @@ All analyses were performed in R using the drc package (Ritz et al. 2015) for si
 ## Referenced Literature
                               
 - Algeciras-Schimnich A, Bruns DE, Boyd JC, Bryant SC, La Fortune KA, Grebe SKG. (2013). Failure of current laboratory protocols to detect lot-to-lot reagent differences: findings and possible solutions. *Clinical Chemistry*, 59(8), 1187-1194. https://doi.org/10.1373/clinchem.2013.205070
-  
-- Chung S, Kang J, Gao Y, et al. (2023). Lot-to-Lot Variance in Immunoassays -- Causes, Consequences, and Solutions. *Diagnostics*, 13(11), 1835. https://doi.org/10.3390/diagnostics13111835
 
 - Feng F, Thompson MP, Thomas BE, et al. (2019). A computational solution to improve biomarker reproducibility during long-term projects. *PLoS ONE*, 14(4), e0209060. https://doi.org/10.1371/journal.pone.0209060
                             
 - Henson RL, Volluz K, Saef BA, et al. (2022). A methodology for normalizing fluid biomarker concentrations across reagent lots. *Alzheimer's and Dementia*, 18(S6), e066912. https://doi.org/10.1002/alz.066912
-
+  
 - Ritz C, Baty F, Streibig JC, Gerhard D. (2015). Dose-response analysis using R. *PLoS ONE*, 10(12), e0146021. https://doi.org/10.1371/journal.pone.0146021
 
 - Tukey JW. (1977). *Exploratory Data Analysis*. Reading, MA: Addison-Wesley Publishing Company. ISBN 978-0-201-07616-5.
