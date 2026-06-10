@@ -111,7 +111,7 @@ When both tiers agree, either is defensible; Tier 1 provides full coverage while
 
 When Tier 1 shows increased variability in the reference sample consistency check (Phase 2.2): Tier 2 is the recommended correction method, as the shared-shape assumption does not adequately describe the variation.
 
-When Tier 2 is unavailable (no reference samples or reference samples do not span all lots), Tier 1 is the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it. Alternatively, lot and plate can be included as covariates in downstream mixed-effects models rather than pre-correcting the data (Whitcomb et al. 2010).
+When Tier 2 is unavailable (no reference samples or reference samples do not span all lots), Tier 1 may be the only option. The Phase 2.2 diagnostics indicate how much confidence to place in it. Alternatively, lot and plate can be included as covariates in downstream mixed-effects models rather than pre-correcting the data (Whitcomb et al. 2010).
 
 
 ## **Dataset Considerations**
